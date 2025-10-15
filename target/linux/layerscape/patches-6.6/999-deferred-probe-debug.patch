@@ -1,0 +1,12 @@
+diff --git a/drivers/net/phy/sfp.c b/drivers/net/phy/sfp.c
+index d855a1830..de90cb604 100644
+--- a/drivers/net/phy/sfp.c
++++ b/drivers/net/phy/sfp.c
+@@ -2934,6 +2934,7 @@ static int sfp_i2c_get(struct sfp *sfp)
+ 
+ 	i2c = i2c_get_adapter_by_fwnode(h);
+ 	if (!i2c) {
++		dev_err(sfp->dev, "Couldnt find i2c_get_adapter_by_fwnode\n");
+ 		err = -EPROBE_DEFER;
+ 		goto put;
+ 	}
