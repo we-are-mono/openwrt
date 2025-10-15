@@ -8,13 +8,13 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=uboot-layerscape
-PKG_VERSION:=lf-6.1.1-1.0.0
+# PKG_VERSION:=6.6.23.2.0.0
 PKG_RELEASE:=1
 
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://github.com/nxp-qoriq/u-boot
-PKG_SOURCE_VERSION:=lf-6.1.1-1.0.0
-PKG_MIRROR_HASH:=f4a3a262fd8923af72dede0348a512c05b756e3925279553eaf1c6667b186fb4
+PKG_SOURCE_URL:=https://github.com/we-are-mono/u-boot
+PKG_SOURCE_VERSION:=mono-development
+# PKG_MIRROR_HASH:=41e089fde1d0b3b0998e6af33d5f4c2b62860bda6cd1e6a0e8d47dfd5749005d
 
 include $(INCLUDE_DIR)/u-boot.mk
 include $(INCLUDE_DIR)/package.mk
@@ -73,6 +73,16 @@ endef
 define U-Boot/fsl_ls1046a-frwy-sdboot
   NAME:=NXP LS1046AFRWY SD Card Boot
   UBOOT_CONFIG:=ls1046afrwy_tfa
+endef
+
+define U-Boot/fsl_ls1046a-gateway_dk_qspi
+  NAME:=MONO GATEWAY_DK QSPI Boot
+  UBOOT_CONFIG:=mono_gateway_dk
+endef
+
+define U-Boot/fsl_ls1046a-gateway_dk_emmc
+  NAME:=MONO GATEWAY_DK EMMC Boot
+  UBOOT_CONFIG:=mono_gateway_dk
 endef
 
 define U-Boot/fsl_ls1046a-rdb
@@ -143,6 +153,8 @@ UBOOT_TARGETS := \
   fsl_ls1043a-rdb-sdboot \
   fsl_ls1046a-frwy \
   fsl_ls1046a-frwy-sdboot \
+  fsl_ls1046a-gateway_dk_qspi \
+  fsl_ls1046a-gateway_dk_emmc \
   fsl_ls1046a-rdb \
   fsl_ls1046a-rdb-sdboot \
   fsl_ls1088a-rdb \

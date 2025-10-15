@@ -8,13 +8,13 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ls-rcw
-PKG_VERSION:=lf-6.1.1-1.0.0
+# PKG_VERSION:=6.6.23.2.0.0
 PKG_RELEASE:=1
 
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://github.com/nxp-qoriq/rcw
-PKG_SOURCE_VERSION:=lf-6.1.1-1.0.0
-PKG_MIRROR_HASH:=3127285549a0a7dd3cded20c2fbfb67b06943faa8dab529f61936dc1bea177db
+PKG_SOURCE_URL:=https://github.com/we-are-mono/rcw
+PKG_SOURCE_VERSION:=mono-development
+# PKG_MIRROR_HASH:=f5e62ac040564eb97f4d1c58496a1586a470008469cb4daee6d7c70be7fdfa07
 
 PKG_FLAGS:=nonshared
 
@@ -39,6 +39,8 @@ BOARDS := \
   ls1046a-frwy-sdboot \
   ls1046a-rdb \
   ls1046a-rdb-sdboot \
+  ls1046a-gateway_dk_qspi \
+  ls1046a-gateway_dk_emmc \
   ls1088a-rdb \
   ls1088a-rdb-sdboot \
   ls2088a-rdb \
@@ -57,6 +59,8 @@ RCW_ls1046a-frwy        :=ls1046afrwy/NN_NNQNNPNP_3040_0506/rcw_1600_qspiboot.bi
 RCW_ls1046a-frwy-sdboot :=ls1046afrwy/NN_NNQNNPNP_3040_0506/rcw_1600_sdboot.bin
 RCW_ls1046a-rdb         :=ls1046ardb/RR_FFSSPPPH_1133_5559/rcw_1800_qspiboot.bin
 RCW_ls1046a-rdb-sdboot  :=ls1046ardb/RR_FFSSPPPH_1133_5559/rcw_1800_sdboot.bin
+RCW_ls1046a-gateway_dk_qspi  :=gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_qspiboot.bin
+RCW_ls1046a-gateway_dk_emmc  :=gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_emmcboot.bin
 RCW_ls1088a-rdb         :=ls1088ardb/FCQQQQQQQQ_PPP_H_0x1d_0x0d/rcw_1600_qspi.bin
 RCW_ls1088a-rdb-sdboot  :=ls1088ardb/FCQQQQQQQQ_PPP_H_0x1d_0x0d/rcw_1600_sd.bin
 RCW_ls2088a-rdb         :=ls2088ardb/FFFFFFFF_PP_HH_0x2a_0x41/rcw_1800.bin

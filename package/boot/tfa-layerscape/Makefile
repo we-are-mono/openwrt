@@ -8,13 +8,13 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=tfa-layerscape
-PKG_VERSION:=lf-6.1.1-1.0.0
-PKG_RELEASE:=1
+# PKG_VERSION:=6.6.23.2.0.0
+PKG_RELEASE:=2
 
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://github.com/nxp-qoriq/atf
-PKG_SOURCE_VERSION:=lf-6.1.1-1.0.0
-PKG_MIRROR_HASH:=c0e3c7d0cc9ee5f9ae68cd705ce7f07f714c4fe3fd4a5a79de5699e7865b759f
+PKG_SOURCE_URL:=https://github.com/we-are-mono/atf
+PKG_SOURCE_VERSION:=mono-development
+# PKG_MIRROR_HASH:=628a95ba60a593ae0575ee9ede1154445ec3a86a07b18e4947e06e13c2b67859
 PKG_BUILD_DEPENDS:=tfa-layerscape/host
 
 include $(INCLUDE_DIR)/host-build.mk
@@ -88,6 +88,18 @@ define Trusted-Firmware-A/ls1043a-rdb-sdboot
   BOOT_MODE:=sd
 endef
 
+define Trusted-Firmware-A/ls1046a-gateway_dk_qspi
+  NAME:=MONO GATEWAY_DK
+  PLAT:=gateway_dk
+  BOOT_MODE:=qspi
+endef
+
+define Trusted-Firmware-A/ls1046a-gateway_dk_emmc
+  NAME:=MONO GATEWAY_DK
+  PLAT:=gateway_dk
+  BOOT_MODE:=emmc
+endef
+
 define Trusted-Firmware-A/ls1046a-frwy
   NAME:=NXP LS1046AFRWY
   PLAT:=ls1046afrwy
@@ -152,6 +164,8 @@ TFA_TARGETS := \
   ls1043a-rdb-sdboot \
   ls1046a-frwy \
   ls1046a-frwy-sdboot \
+  ls1046a-gateway_dk_qspi \
+  ls1046a-gateway_dk_emmc \
   ls1046a-rdb \
   ls1046a-rdb-sdboot \
   ls1088a-rdb \
