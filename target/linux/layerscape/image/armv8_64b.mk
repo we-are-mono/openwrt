@@ -233,6 +233,48 @@ define Device/fsl_ls1046a-frwy-sdboot
 endef
 TARGET_DEVICES += fsl_ls1046a-frwy-sdboot
 
+define Device/fsl_ls1046a-gateway_dk_qspi
+  DEVICE_VENDOR := MONO
+  DEVICE_MODEL := MONO-GATEWAY_DK_QSPI
+  DEVICE_VARIANT := Default
+  DEVICE_PACKAGES += \
+    ~layerscape-fman \
+    ~trusted-firmware-a-ls1046a-gateway_dk_qspi
+  DEVICE_DTS := mono-gateway-dk
+  IMAGE/firmware.bin := \
+    ls-clean | \
+    ls-append $(1)-bl2.pbl | pad-to 1M | \
+    ls-append $(1)-fip.bin | pad-to 5M | \
+    ls-append $(1)-uboot-env.bin | pad-to 9M | \
+    ls-append fsl_ls1046a-rdb-fman.bin | pad-to 15M | \
+    ls-append-dtb $$(DEVICE_DTS) | pad-to 16M | \
+    append-kernel | pad-to 32M | \
+    append-rootfs | pad-rootfs | check-size
+endef
+TARGET_DEVICES += fsl_ls1046a-gateway_dk_qspi
+
+define Device/fsl_ls1046a-gateway_dk_emmc
+  $(Device/rework-sdcard-images)
+  $(Device/fsl-sdboot)
+  DEVICE_VENDOR := MONO
+  DEVICE_MODEL := MONO-GATEWAY_DK_EMMC
+  DEVICE_VARIANT := EMMC_BUILD
+  DEVICE_PACKAGES += \
+    ~layerscape-fman \
+    ~trusted-firmware-a-ls1046a-gateway_dk_emmc
+  DEVICE_DTS := mono-gateway-dk
+  IMAGE/sdcard.img.gz := \
+    ls-clean | \
+    ls-append-sdhead $(1) | pad-to 4K | \
+    ls-append $(1)-bl2.pbl | pad-to 1M | \
+    ls-append $(1)-fip.bin | pad-to 3M | \
+    ls-append $(1)-uboot-env.bin | pad-to 4M | \
+    ls-append fsl_ls1046a-rdb-fman.bin | pad-to 16M | \
+    ls-append-kernel | pad-to $(LS_SD_ROOTFSPART_OFFSET)M | \
+    append-rootfs | pad-to $(LS_SD_IMAGE_SIZE)M | gzip
+endef
+TARGET_DEVICES += fsl_ls1046a-gateway_dk_emmc
+
 define Device/fsl_ls1046a-rdb
   $(Device/fix-sysupgrade)
   DEVICE_VENDOR := NXP
