@@ -13,7 +13,7 @@ PKG_RELEASE:=1
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/we-are-mono/rcw
-PKG_SOURCE_VERSION:=mono-development
+PKG_SOURCE_VERSION:=mt-6.12.34-2.1.0
 # PKG_MIRROR_HASH:=f5e62ac040564eb97f4d1c58496a1586a470008469cb4daee6d7c70be7fdfa07
 
 PKG_FLAGS:=nonshared

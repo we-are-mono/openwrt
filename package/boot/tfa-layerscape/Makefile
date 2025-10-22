@@ -13,7 +13,7 @@ PKG_RELEASE:=2
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/we-are-mono/atf
-PKG_SOURCE_VERSION:=mono-development
+PKG_SOURCE_VERSION:=mt-6.12.34-2.1.0
 # PKG_MIRROR_HASH:=628a95ba60a593ae0575ee9ede1154445ec3a86a07b18e4947e06e13c2b67859
 PKG_BUILD_DEPENDS:=tfa-layerscape/host
 
