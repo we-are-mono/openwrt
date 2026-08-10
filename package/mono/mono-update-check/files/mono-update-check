@@ -11,14 +11,21 @@ STATE=/tmp/mono-update-available
 [ -n "$URL" ] || exit 0
 
 CURRENT=$(cat /etc/mono_release 2>/dev/null || echo dev)
+BOARD=$(board_name)
+BOARD=${BOARD%-sdboot}
 JSON=$(wget -q -T 30 -O - "$URL/latest.json") || {
 	logger -t mono-update "cannot fetch $URL/latest.json"
 	exit 0
 }
 
 TAG=$(echo "$JSON" | jsonfilter -e '@.tag')
-SYSUPGRADE_URL=$(echo "$JSON" | jsonfilter -e '@.sysupgrade')
-SHA=$(echo "$JSON" | jsonfilter -e '@.sha256')
+SYSUPGRADE_URL=$(echo "$JSON" | jsonfilter -e "@.devices['$BOARD'].sysupgrade")
+SHA=$(echo "$JSON" | jsonfilter -e "@.devices['$BOARD'].sha256")
+
+[ -n "$SYSUPGRADE_URL" ] || {
+	logger -t mono-update "no image for board $BOARD in latest.json"
+	exit 0
+}
 
 [ -n "$TAG" ] || exit 0
 if [ "$TAG" = "$CURRENT" ]; then

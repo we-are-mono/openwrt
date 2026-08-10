@@ -62,23 +62,34 @@ make -j"$(nproc)" world || cleanup_fail
 
 OUT="releases/$RELTAG"
 BINDIR=bin/targets/layerscape/armv8_64b
+URLBASE="${MONO_PUBLISH_URL:-https://openwrt.mono.si}"
 rm -rf "$OUT"
 mkdir -p "$OUT"
-cp "$BINDIR"/openwrt-layerscape-armv8_64b-mono_gateway-dk-ext4-emmc.img.gz "$OUT/"
-cp "$BINDIR"/openwrt-layerscape-armv8_64b-mono_gateway-dk-ext4-sysupgrade.bin "$OUT/"
-cp "$BINDIR"/openwrt-layerscape-armv8_64b-mono_gateway-dk.manifest "$OUT/"
+cp "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-emmc.img.gz \
+   "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-sysupgrade.bin \
+   "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*.manifest "$OUT/"
 git format-patch --quiet -o "$OUT/patches" "$LATEST..$BRANCH"
 (cd "$OUT" && sha256sum *.img.gz *.bin > sha256sums)
 
-SYSUPGRADE_SHA=$(sha256sum "$OUT"/*-sysupgrade.bin | cut -d' ' -f1)
-cat > releases/latest.json <<EOF
+# One entry per built mono device, keyed by board name (device profile
+# name with the first underscore as the vendor comma, matching the
+# SUPPORTED_DEVICES convention).
 {
-	"tag": "$RELTAG",
-	"date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-	"sysupgrade": "${MONO_PUBLISH_URL:-https://openwrt.mono.si}/$RELTAG/$(basename "$OUT"/*-sysupgrade.bin)",
-	"sha256": "$SYSUPGRADE_SHA"
-}
-EOF
+	printf '{\n\t"tag": "%s",\n\t"date": "%s",\n\t"devices": {' \
+		"$RELTAG" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	sep=""
+	for f in "$OUT"/*-sysupgrade.bin; do
+		dev=$(basename "$f")
+		dev=${dev#openwrt-layerscape-armv8_64b-}
+		dev=${dev%-ext4-sysupgrade.bin}
+		board=$(echo "$dev" | sed 's/_/,/')
+		sha=$(sha256sum "$f" | cut -d' ' -f1)
+		printf '%s\n\t\t"%s": { "sysupgrade": "%s/%s/%s", "sha256": "%s" }' \
+			"$sep" "$board" "$URLBASE" "$RELTAG" "$(basename "$f")" "$sha"
+		sep=","
+	done
+	printf '\n\t}\n}\n'
+} > releases/latest.json
 
 if [ -n "${MONO_PUBLISH_DEST:-}" ]; then
 	echo "mono-update: publishing to $MONO_PUBLISH_DEST"

@@ -58,13 +58,20 @@ define Build/Compile
 			-L$(STAGING_DIR)/usr/lib -lfmc -lfm -lstdc++ -lxml2 -lm"
 endef
 
+# cdx_cfg.xml is the only device-specific ASK input; all variants ship
+# and a preinit hook links the right one for the booted board (preinit,
+# not uci-defaults: cdx.ko autoloads before uci-defaults run).
 define Package/dpa-app/install
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/dpa_app/dpa_app $(1)/usr/bin/
 	$(INSTALL_DIR) $(1)/etc
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/dpa_app/files/etc/cdx_pcd.xml $(1)/etc/
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/dpa_app/files/etc/cdx_sp.xml $(1)/etc/
-	$(INSTALL_DATA) $(PKG_BUILD_DIR)/config/gateway-dk/cdx_cfg.xml $(1)/etc/
+	$(INSTALL_DIR) $(1)/etc/cdx_cfg
+	$(foreach cfg,$(wildcard $(PKG_BUILD_DIR)/config/*/cdx_cfg.xml), \
+		$(INSTALL_DATA) $(cfg) $(1)/etc/cdx_cfg/$(notdir $(patsubst %/cdx_cfg.xml,%,$(cfg))).xml; )
+	$(INSTALL_DIR) $(1)/lib/preinit
+	$(INSTALL_DATA) ./files/81_cdx_cfg_select $(1)/lib/preinit/
 endef
 
 $(eval $(call BuildPackage,dpa-app))
