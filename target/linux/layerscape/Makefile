@@ -12,6 +12,20 @@ KERNEL_PATCHVER:=6.12
 # names the build dir and gives kmod packages an apk-valid version.
 KERNEL_GIT_LINUX_VERSION:=6.12.49
 
+# Authoritative pin for the NXP vendor kernel (tag lf-6.12.49-2.2.0). This is
+# the source of truth; the build seed sets CONFIG_KERNEL_GIT_REF to match.
+# If a git-clone kernel build uses any other ref (or the seed was skipped and
+# it defaulted to HEAD), stop hard rather than silently building a different,
+# non-reproducible kernel the ASK patch series may not even apply to.
+MONO_KERNEL_GIT_REF:=df24f9428e38740256a410b983003a478e72a7c0
+ifeq ($(TARGET_BUILD),1)
+  ifneq ($(call qstrip,$(CONFIG_KERNEL_GIT_CLONE_URI)),)
+    ifneq ($(call qstrip,$(CONFIG_KERNEL_GIT_REF)),$(MONO_KERNEL_GIT_REF))
+      $(error CONFIG_KERNEL_GIT_REF='$(call qstrip,$(CONFIG_KERNEL_GIT_REF))' != pinned $(MONO_KERNEL_GIT_REF); use configs/mono_gateway-dk.seed)
+    endif
+  endif
+endif
+
 FEATURES:=squashfs nand usb pcie gpio fpu ubifs ext4 rootfs-part boot-part
 SUBTARGETS:=armv8_64b armv7
 
