@@ -35,6 +35,9 @@ done
 
 git fetch --quiet origin 'refs/tags/v*:refs/tags/v*'
 
+# Deliberately tracks only the current minor series (v25.12.x patch
+# releases). A new minor or major (kernel/vendor bump, new ASK base) is a
+# manual, eyes-open migration - it is never followed unattended.
 BASE=$(git tag --merged "$BRANCH" 'v[0-9]*' | sort -V | tail -1)
 SERIES=${BASE%.*}
 LATEST=$(git tag -l "${SERIES}.*" | sort -V | tail -1)
@@ -105,25 +108,53 @@ cp "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-emmc.img.gz \
 git format-patch --quiet -o "$OUT/patches" "$LATEST..$BRANCH"
 (cd "$OUT" && sha256sum *.img.gz *.bin > sha256sums)
 
-# One entry per built mono device, keyed by board name (device profile
-# name with the first underscore as the vendor comma, matching the
-# SUPPORTED_DEVICES convention).
-{
-	printf '{\n\t"tag": "%s",\n\t"date": "%s",\n\t"devices": {' \
-		"$RELTAG" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-	sep=""
-	for f in "$OUT"/*-sysupgrade.bin; do
-		dev=$(basename "$f")
-		dev=${dev#openwrt-layerscape-armv8_64b-}
-		dev=${dev%-ext4-sysupgrade.bin}
-		board=$(echo "$dev" | sed 's/_/,/')
-		sha=$(sha256sum "$f" | cut -d' ' -f1)
-		printf '%s\n\t\t"%s": { "sysupgrade": "%s/%s/%s", "sha256": "%s" }' \
-			"$sep" "$board" "$URLBASE" "$RELTAG" "$(basename "$f")" "$sha"
-		sep=","
-	done
-	printf '\n\t}\n}\n'
-} > releases/latest.json
+# Sign the hash list. This - not the sha in latest.json - is the trust
+# anchor devices verify against the baked public key before flashing.
+USIGN=staging_dir/host/bin/usign
+if [ -n "${MONO_SIGN_KEY:-}" ] && [ -x "$USIGN" ]; then
+	"$USIGN" -S -m "$OUT/sha256sums" -s "$MONO_SIGN_KEY" -x "$OUT/sha256sums.sig"
+	echo "mono-update: signed sha256sums"
+else
+	echo "mono-update: WARNING: unsigned release (set MONO_SIGN_KEY); auto-update devices will refuse it" >&2
+fi
+
+# A real flashing tool, shipped with the release (not a two-step dd in prose).
+cat > "$OUT/flash-mono-gateway.sh" <<'FLASH'
+#!/bin/sh
+# Flash a Mono Gateway eMMC image from recovery Linux, leaving the boot
+# firmware (4 KiB-32 MiB) intact. Usage: flash-mono-gateway.sh <emmc.img.gz> [dev]
+set -e
+IMG="$1"; DEV="${2:-/dev/mmcblk0}"
+[ -f "$IMG" ] || { echo "usage: $0 <...-emmc.img.gz> [/dev/mmcblkN]"; exit 1; }
+case "$IMG" in *.gz) feed(){ gunzip -c "$IMG"; };; *) feed(){ cat "$IMG"; };; esac
+echo "GPT (first 4 KiB)...";     feed | dd of="$DEV" bs=512 count=8 conv=fsync
+echo "System (from 32 MiB)..."; feed | dd of="$DEV" bs=1M skip=32 seek=32 conv=fsync
+sync; echo "Done - set DIP to eMMC and reboot."
+FLASH
+chmod +x "$OUT/flash-mono-gateway.sh"
+
+# latest.json: board keys come from the image metadata (profiles.json),
+# not filename string-surgery, so a device that finds no image for its
+# board fails visibly rather than from a silent naming drift.
+python3 - "$RELTAG" "$URLBASE" "$OUT" "$BINDIR/profiles.json" \
+	> releases/latest.json <<'PY'
+import json, sys, os, hashlib, datetime
+reltag, urlbase, out, profiles = sys.argv[1:5]
+prof = json.load(open(profiles)).get("profiles", {})
+devices = {}
+for name, p in prof.items():
+    boards = p.get("supported_devices") or []
+    img = next((im["name"] for im in p.get("images", [])
+                if im.get("name", "").endswith("sysupgrade.bin")
+                and os.path.exists(os.path.join(out, im["name"]))), None)
+    if not boards or not img:
+        continue
+    h = hashlib.sha256(open(os.path.join(out, img), "rb").read()).hexdigest()
+    devices[boards[0]] = {"sysupgrade": f"{urlbase}/{reltag}/{img}", "sha256": h}
+json.dump({"tag": reltag,
+           "date": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "devices": devices}, sys.stdout, indent=2)
+PY
 
 if [ -n "${MONO_PUBLISH_DEST:-}" ]; then
 	echo "mono-update: publishing to $MONO_PUBLISH_DEST"
@@ -146,7 +177,8 @@ if git remote get-url mono >/dev/null 2>&1; then
 		gh release create "$RELTAG" --repo "$REPO" \
 			--title "$RELTAG" \
 			--notes "Automated release: OpenWrt $LATEST base, branch $(git rev-parse --short "$BRANCH")." \
-			"$OUT"/*-sysupgrade.bin "$OUT"/*-emmc.img.gz "$OUT/sha256sums" \
+			"$OUT"/*-sysupgrade.bin "$OUT"/*-emmc.img.gz \
+			"$OUT/sha256sums" "$OUT"/sha256sums.sig "$OUT/flash-mono-gateway.sh" \
 			|| echo "mono-update: WARNING: GitHub release failed" >&2
 	fi
 fi

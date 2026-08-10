@@ -11,15 +11,19 @@ define Package/mono-update-check
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=Mono Gateway update checker
-  DEPENDS:=@TARGET_layerscape
+  # usign: verify the release signature. ca-bundle: validate the server
+  # TLS cert on the https fetch (both are the update trust chain, so they
+  # are hard deps, not left to transitive luck from other packages).
+  DEPENDS:=@TARGET_layerscape +usign +ca-bundle
 endef
 
 define Package/mono-update-check/description
   Daily check of a mono firmware server (latest.json) against the
   image's baked release tag. Disabled until uci sets the server URL:
     uci set mono-update.check.url='https://.../openwrt'
-  mode 'notify' (default) logs availability; mode 'auto' downloads,
-  verifies sha256 and applies sysupgrade unattended.
+  mode 'notify' (default) logs availability; mode 'auto' verifies the
+  release signature (usign) against the baked public key, then the image
+  hash against the signed hash list, then applies sysupgrade unattended.
 endef
 
 define Build/Compile
@@ -48,6 +52,9 @@ define Package/mono-update-check/install
 	$(INSTALL_BIN) ./files/mono-update-check $(1)/usr/sbin/
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/90-mono-update-cron $(1)/etc/uci-defaults/
+	# Public half of the offline release-signing key; the trust anchor
+	# for auto-mode. Private key never leaves the release host.
+	$(INSTALL_DATA) ./files/mono-release.pub $(1)/etc/mono-release.pub
 endef
 
 $(eval $(call BuildPackage,mono-update-check))

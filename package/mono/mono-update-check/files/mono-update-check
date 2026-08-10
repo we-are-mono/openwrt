@@ -1,35 +1,64 @@
 #!/bin/sh
 # Compare the image's baked release tag against the server's latest.json.
-# mode=notify: log and drop a state file. mode=auto: download, verify
-# sha256, sysupgrade (config is preserved by the platform upgrade flow).
+#   notify (default): log availability + drop a state file. No download.
+#   auto: verify the release SIGNATURE against the baked public key, then
+#         the image hash against the signed hash list, then sysupgrade.
+# Trust anchor is /etc/mono-release.pub, NOT anything in latest.json - the
+# sha in the JSON is untrusted routing data.
 . /lib/functions.sh
 
 URL=$(uci -q get mono-update.check.url)
 MODE=$(uci -q get mono-update.check.mode)
 STATE=/tmp/mono-update-available
+PUBKEY=/etc/mono-release.pub
 
 [ -n "$URL" ] || exit 0
 
 CURRENT=$(cat /etc/mono_release 2>/dev/null || echo dev)
 BOARD=$(board_name)
 BOARD=${BOARD%-sdboot}
+
+# mono-vMAJOR.MINOR.PATCH[-rN] -> "MAJOR MINOR PATCH N" (0 when absent)
+ver_key() {
+	v=${1#mono-v}
+	case "$v" in *-r*) r=${v##*-r};; *) r=0;; esac
+	v=${v%-r*}
+	IFS=. read -r a b c _ <<-EOF
+	$v
+	EOF
+	echo "${a:-0} ${b:-0} ${c:-0} ${r:-0}"
+}
+
+# Is $1 strictly newer than $2? Unparseable current (e.g. "dev") => yes.
+is_newer() {
+	case "$2" in mono-v*) ;; *) return 0;; esac
+	set -- $(ver_key "$1") $(ver_key "$2")
+	i=1
+	while [ $i -le 4 ]; do
+		eval "r=\$$i; c=\$$((i + 4))"
+		[ "$r" -gt "$c" ] && return 0
+		[ "$r" -lt "$c" ] && return 1
+		i=$((i + 1))
+	done
+	return 1
+}
+
 JSON=$(wget -q -T 30 -O - "$URL/latest.json") || {
 	logger -t mono-update "cannot fetch $URL/latest.json"
 	exit 0
 }
-
 TAG=$(echo "$JSON" | jsonfilter -e '@.tag')
 SYSUPGRADE_URL=$(echo "$JSON" | jsonfilter -e "@.devices['$BOARD'].sysupgrade")
-SHA=$(echo "$JSON" | jsonfilter -e "@.devices['$BOARD'].sha256")
 
 [ -n "$SYSUPGRADE_URL" ] || {
 	logger -t mono-update "no image for board $BOARD in latest.json"
 	exit 0
 }
-
 [ -n "$TAG" ] || exit 0
-if [ "$TAG" = "$CURRENT" ]; then
-	rm -f "$STATE"
+
+if ! is_newer "$TAG" "$CURRENT"; then
+	rm -f "$STATE"           # up to date or a refused downgrade
+	[ "$TAG" = "$CURRENT" ] || logger -t mono-update "ignoring non-forward $TAG (running $CURRENT)"
 	exit 0
 fi
 
@@ -38,17 +67,37 @@ echo "$TAG $SYSUPGRADE_URL" > "$STATE"
 
 [ "$MODE" = "auto" ] || exit 0
 
-FILE=/tmp/mono-sysupgrade.bin
-logger -t mono-update "auto mode: downloading $TAG"
-wget -q -T 300 -O "$FILE" "$SYSUPGRADE_URL" || {
-	logger -t mono-update "download failed"
-	rm -f "$FILE"
+# --- auto mode: signature-gated, RAM-guarded flash ---------------------
+[ -f "$PUBKEY" ] || { logger -t mono-update "no $PUBKEY, refusing auto-flash"; exit 1; }
+command -v usign >/dev/null 2>&1 || { logger -t mono-update "usign missing, refusing"; exit 1; }
+
+# The whole image lives in a ramdisk during sysupgrade; don't start if RAM
+# is tight (protects lean variants; the DK has 8 GB and passes trivially).
+AVAIL=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
+[ -n "$AVAIL" ] && [ "$AVAIL" -lt 786432 ] && {
+	logger -t mono-update "MemAvailable ${AVAIL}KB too low, skipping auto-flash"
 	exit 1
 }
-echo "$SHA  $FILE" | sha256sum -c -s || {
-	logger -t mono-update "sha256 mismatch, refusing to flash"
-	rm -f "$FILE"
-	exit 1
-}
-logger -t mono-update "applying $TAG via sysupgrade"
-exec sysupgrade "$FILE"
+
+DIR=${SYSUPGRADE_URL%/*}
+IMG_NAME=${SYSUPGRADE_URL##*/}
+TMP=/tmp/mono-update
+rm -rf "$TMP"; mkdir -p "$TMP"
+
+fetch() { wget -q -T 300 -O "$2" "$1"; }
+fail() { logger -t mono-update "$1"; rm -rf "$TMP"; exit 1; }
+
+fetch "$DIR/sha256sums"     "$TMP/sha256sums"     || fail "cannot fetch sha256sums"
+fetch "$DIR/sha256sums.sig" "$TMP/sha256sums.sig" || fail "cannot fetch signature"
+usign -V -m "$TMP/sha256sums" -x "$TMP/sha256sums.sig" -p "$PUBKEY" \
+	|| fail "signature verification FAILED - refusing $TAG"
+
+WANT=$(awk -v n="$IMG_NAME" '$2==n || $2=="*"n {print $1}' "$TMP/sha256sums" | head -1)
+[ -n "$WANT" ] || fail "image $IMG_NAME not in signed hash list"
+
+fetch "$SYSUPGRADE_URL" "$TMP/image.bin" || fail "image download failed"
+GOT=$(sha256sum "$TMP/image.bin" | cut -d' ' -f1)
+[ "$GOT" = "$WANT" ] || fail "image hash mismatch (signed list) - refusing"
+
+logger -t mono-update "verified $TAG, applying via sysupgrade"
+exec sysupgrade "$TMP/image.bin"
