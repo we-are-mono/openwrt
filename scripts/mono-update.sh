@@ -39,12 +39,28 @@ BASE=$(git tag --merged "$BRANCH" 'v[0-9]*' | sort -V | tail -1)
 SERIES=${BASE%.*}
 LATEST=$(git tag -l "${SERIES}.*" | sort -V | tail -1)
 
-if [ "$LATEST" = "$BASE" ] && [ -z "$FORCE" ]; then
-	echo "mono-update: up to date (base $BASE)"
-	exit 0
+# Two release triggers: a new upstream stable tag (mono-vX.Y.Z), or new
+# commits on the branch since the last release of the current base -
+# ASK pin bumps, package fixes - which cut a revision (mono-vX.Y.Z-rN).
+if [ "$LATEST" != "$BASE" ]; then
+	RELTAG="mono-$LATEST"
+	echo "mono-update: $BASE -> $LATEST ($RELTAG)"
+else
+	LASTTAG=$(git tag -l "mono-$BASE" "mono-$BASE-r*" | sort -V | tail -1)
+	if [ -n "$LASTTAG" ] && [ -z "$FORCE" ] && \
+	   [ "$(git rev-parse "$LASTTAG^{commit}")" = "$(git rev-parse "$BRANCH")" ]; then
+		echo "mono-update: up to date ($LASTTAG at branch head)"
+		exit 0
+	fi
+	if [ -z "$LASTTAG" ]; then
+		RELTAG="mono-$BASE"
+	elif [ "$LASTTAG" = "mono-$BASE" ]; then
+		RELTAG="mono-$BASE-r2"
+	else
+		RELTAG="mono-$BASE-r$(( ${LASTTAG##*-r} + 1 ))"
+	fi
+	echo "mono-update: new commits on $BASE -> $RELTAG"
 fi
-
-echo "mono-update: $BASE -> $LATEST"
 [ -n "$DRY_RUN" ] && exit 0
 
 if [ "$LATEST" != "$BASE" ]; then
@@ -58,7 +74,6 @@ fi
 
 # Tag before building so the image can bake its own release identity
 # (mono-update-check reads it at build time). Dropped again on failure.
-RELTAG="mono-$LATEST"
 git tag -f "$RELTAG"
 
 cleanup_fail() {
@@ -122,7 +137,7 @@ if git remote get-url mono >/dev/null 2>&1; then
 		REPO=$(git remote get-url mono | sed -E 's#(git@[^:]+:|https://[^/]+/)##; s#\.git$##')
 		gh release create "$RELTAG" --repo "$REPO" \
 			--title "$RELTAG" \
-			--notes "Automated release tracking OpenWrt $LATEST." \
+			--notes "Automated release: OpenWrt $LATEST base, branch $(git rev-parse --short "$BRANCH")." \
 			"$OUT"/*-sysupgrade.bin "$OUT"/*-emmc.img.gz "$OUT/sha256sums" \
 			|| echo "mono-update: WARNING: GitHub release failed" >&2
 	fi
