@@ -415,6 +415,10 @@ define Build/mono-bootfs
 	$(CP) $(DEVICE_DTS_DIR)/$(DEVICE_DTS).dtb $@.bootdir/boot/
 	printf 'label OpenWrt\n\tkernel /boot/Image.gz\n\tfdt /boot/%s.dtb\n\tappend root=/dev/mmcblk0p2 rootwait console=ttyS0,115200 earlycon=uart8250,mmio,0x21c0500\n' \
 		"$(DEVICE_DTS)" > $@.bootdir/boot/extlinux/extlinux.conf
+	# Backup GPT (33-sector tail) travels in the boot partition; first boot
+	# dd's it to the device end so the on-disk table is complete.
+	python3 mono_gpt.py backup $@.bootdir/boot/backup-gpt.bin \
+		$(MONO_EMMC_SECTORS) $(MONO_BOOTFS_SIZE) $(MONO_ROOTFS_PART)
 	truncate -s $(MONO_BOOTFS_SIZE)M $@.bootfs
 	$(STAGING_DIR_HOST)/bin/mkfs.ext4 -F -L boot -d $@.bootdir $@.bootfs
 endef
@@ -422,7 +426,7 @@ endef
 define Build/mono-emmc-img
 	rm -f $@
 	./gen_mono_emmc_img.sh $@ $@.bootfs $(IMAGE_ROOTFS) \
-		$(MONO_BOOTFS_SIZE) $(MONO_ROOTFS_PART)
+		$(MONO_BOOTFS_SIZE) $(MONO_ROOTFS_PART) $(MONO_EMMC_SECTORS)
 endef
 
 # Same resize-metadata prep as the eMMC image (make_ext4fs output
@@ -459,12 +463,13 @@ define Device/mono_gateway-dk
 	block-mount kmod-usb-storage-uas kmod-fs-exfat kmod-fs-ntfs3 \
 	kmod-fs-vfat smartmontools usbutils pciutils i2c-tools \
 	tmux vim-full curl rsync jq less bind-dig openssh-sftp-server \
-	sgdisk file ip-full resize2fs mono-update-check
+	usign ca-bundle file ip-full resize2fs mono-update-check
   KERNEL_NAME := Image
   KERNEL := kernel-bin | gzip
   FILESYSTEMS := ext4
   MONO_BOOTFS_SIZE := 64
   MONO_ROOTFS_PART := 30208
+  MONO_EMMC_SECTORS := 62160896
   SUPPORTED_DEVICES := mono,gateway-dk mono,gateway-dk-sdboot
   IMAGES := emmc.img.gz sysupgrade.bin
   IMAGE/emmc.img.gz := mono-bootfs | mono-emmc-img | gzip | append-metadata

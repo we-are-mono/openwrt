@@ -1,17 +1,50 @@
 #!/bin/sh
-# The eMMC image ships a 1 GB ext4 rootfs inside a partition already
-# sized to the full eMMC (the GPT is never rewritten on-device because
-# the entry array lives at 5 MiB, clear of the raw boot firmware, and
-# standard partition tools would relocate it). Grow the filesystem to
-# the partition once, online, on first boot.
+# First-boot disk fixups for the Mono Gateway. Two jobs:
+#  1. Grow the rootfs to fill its partition. The image ships a small ext4
+#     inside a partition already sized to the full eMMC (the on-device GPT
+#     is never rewritten by an upgrade, and its entry array sits in the
+#     first 4 KiB clear of the boot firmware; see mono_gpt.py).
+#  2. Write the backup GPT to the end of the device. The flashed image is
+#     trimmed and carries only the primary GPT, so the secondary copy is
+#     laid down here from the blob shipped in the boot partition. This makes
+#     the on-disk table complete so partition tools do not "repair" it.
+# uci-defaults run once and self-delete on exit 0; both steps are idempotent
+# so a re-run after sysupgrade is harmless.
 . /lib/functions.sh
 
 case "$(board_name)" in
-mono,gateway-dk|mono,gateway-dk-sdboot)
-	root_dev=$(readlink -f /dev/root 2>/dev/null)
-	[ "$root_dev" = "/dev/mmcblk0p2" ] || root_dev=/dev/mmcblk0p2
-	resize2fs "$root_dev" 2>&1 | logger -t expand-rootfs
-	;;
+mono,gateway-dk|mono,gateway-dk-sdboot) ;;
+*) exit 0 ;;
 esac
 
-exit 0
+disk=/dev/mmcblk0
+rc=0
+
+# 1. grow rootfs
+root_dev=$(readlink -f /dev/root 2>/dev/null)
+[ -b "$root_dev" ] || root_dev=/dev/mmcblk0p2
+if ! resize2fs "$root_dev" 2>&1 | logger -t mono-firstboot; then
+	logger -t mono-firstboot "resize2fs failed on $root_dev"
+	rc=1
+fi
+
+# 2. lay down the backup GPT from the blob in the boot partition
+if [ -b /dev/mmcblk0p1 ]; then
+	mkdir -p /tmp/bootp
+	if mount -t ext4 -o ro /dev/mmcblk0p1 /tmp/bootp 2>/dev/null; then
+		if [ -f /tmp/bootp/boot/backup-gpt.bin ]; then
+			sectors=$(blockdev --getsz "$disk" 2>/dev/null)
+			if [ -n "$sectors" ]; then
+				dd if=/tmp/bootp/boot/backup-gpt.bin of="$disk" \
+					bs=512 seek=$((sectors - 33)) conv=fsync 2>/dev/null \
+					&& logger -t mono-firstboot "backup GPT written at sector $((sectors - 33))" \
+					|| { logger -t mono-firstboot "backup GPT write failed"; rc=1; }
+			fi
+		fi
+		umount /tmp/bootp 2>/dev/null
+	fi
+	rmdir /tmp/bootp 2>/dev/null
+fi
+
+# Non-zero keeps this script for a retry next boot.
+exit $rc
