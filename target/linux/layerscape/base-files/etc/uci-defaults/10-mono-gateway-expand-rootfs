@@ -1,0 +1,17 @@
+#!/bin/sh
+# The eMMC image ships a 1 GB ext4 rootfs inside a partition already
+# sized to the full eMMC (the GPT is never rewritten on-device because
+# the entry array lives at 5 MiB, clear of the raw boot firmware, and
+# standard partition tools would relocate it). Grow the filesystem to
+# the partition once, online, on first boot.
+. /lib/functions.sh
+
+case "$(board_name)" in
+mono,gateway-dk|mono,gateway-dk-sdboot)
+	root_dev=$(readlink -f /dev/root 2>/dev/null)
+	[ "$root_dev" = "/dev/mmcblk0p2" ] || root_dev=/dev/mmcblk0p2
+	resize2fs "$root_dev" 2>&1 | logger -t expand-rootfs
+	;;
+esac
+
+exit 0
