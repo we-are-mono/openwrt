@@ -102,8 +102,8 @@ BINDIR=bin/targets/layerscape/armv8_64b
 URLBASE="${MONO_PUBLISH_URL:-https://openwrt.mono.si}"
 rm -rf "$OUT"
 mkdir -p "$OUT"
-cp "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-emmc.img.gz \
-   "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-sysupgrade.bin \
+cp "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-ext4-emmc.img.gz \
+   "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-ext4-sysupgrade.bin \
    "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*.manifest "$OUT/"
 git format-patch --quiet -o "$OUT/patches" "$LATEST..$BRANCH"
 (cd "$OUT" && sha256sum *.img.gz *.bin > sha256sums)
