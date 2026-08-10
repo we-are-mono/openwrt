@@ -431,7 +431,7 @@ endef
 define Build/mono-sysupgrade
 	cp $(IMAGE_ROOTFS) $@.rootfs
 	e2fsck -fy $@.rootfs || true
-	truncate -s 1536M $@.rootfs
+	truncate -s 384M $@.rootfs
 	resize2fs $@.rootfs
 	sh $(TOPDIR)/scripts/sysupgrade-tar.sh \
 		--board $(subst _,$(comma),$(DEVICE_NAME)) \

@@ -80,7 +80,7 @@ platform_do_upgrade_mono() {
 	tar xf $tar_file ${board_dir}/kernel -O | dd of=/dev/mmcblk0p1 bs=1M conv=fsync 2>/dev/null
 	echo "Writing rootfs..."
 	tar xf $tar_file ${board_dir}/root -O | dd of=/dev/mmcblk0p2 bs=1M conv=fsync 2>/dev/null
-	# rootfs ships at 1.5G; the uci-defaults script in it re-expands
+	# rootfs ships at 384M; the uci-defaults script in it re-expands
 	# to the full partition on first boot
 }
 

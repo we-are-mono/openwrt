@@ -32,7 +32,7 @@ ROOTFSPARTSIZE="$5"
 # after that the first-boot online resize works. Verified via loop mount.
 cp "$ROOTFS" "$OUTPUT.rootfs"
 e2fsck -fy "$OUTPUT.rootfs" || [ $? -le 2 ]
-truncate -s 1536M "$OUTPUT.rootfs"
+truncate -s 384M "$OUTPUT.rootfs"
 resize2fs "$OUTPUT.rootfs"
 ROOTFS="$OUTPUT.rootfs"
 
