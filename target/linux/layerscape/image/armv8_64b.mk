@@ -429,7 +429,7 @@ define Device/mono_gateway-dk
   DEVICE_VENDOR := Mono
   DEVICE_MODEL := Gateway DK
   DEVICE_PACKAGES := kmod-ask-cdx kmod-ask-fci kmod-ask-auto-bridge \
-	cmm dpa-app fmc
+	cmm dpa-app fmc kmod-leds-lp5812 kmod-sfp-led fancontrol
   KERNEL_NAME := Image
   KERNEL := kernel-bin | gzip
   MONO_BOOTFS_SIZE := 64
