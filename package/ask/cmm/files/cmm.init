@@ -1,0 +1,26 @@
+#!/bin/sh /etc/rc.common
+# ASK Connection Manager. cmm self-daemonizes (no foreground mode), so this
+# is a plain SysV script rather than a procd service. Modules cdx (30),
+# auto_bridge (31) and fci (52) are loaded by kmodloader before START=54.
+
+START=54
+STOP=10
+
+vwd_fast_path() {
+	[ -e /sys/class/vwd/vwd0/vwd_fast_path_enable ] && \
+		echo "$1" > /sys/class/vwd/vwd0/vwd_fast_path_enable
+}
+
+start() {
+	[ -e /dev/cdx_ctrl ] || {
+		echo "cmm: /dev/cdx_ctrl not present, cdx.ko not loaded - not starting" >&2
+		return 1
+	}
+	vwd_fast_path 1
+	/usr/bin/cmm -f /etc/config/fastforward -n 131072
+}
+
+stop() {
+	killall cmm 2>/dev/null
+	vwd_fast_path 0
+}
