@@ -422,17 +422,33 @@ endef
 define Build/mono-emmc-img
 	rm -f $@
 	./gen_mono_emmc_img.sh $@ $@.bootfs $(IMAGE_ROOTFS) \
-		$(MONO_BOOTFS_SIZE) $(CONFIG_TARGET_ROOTFS_PARTSIZE)
+		$(MONO_BOOTFS_SIZE) $(MONO_ROOTFS_PART)
 endef
 
 define Device/mono_gateway-dk
   DEVICE_VENDOR := Mono
   DEVICE_MODEL := Gateway DK
   DEVICE_PACKAGES := kmod-ask-cdx kmod-ask-fci kmod-ask-auto-bridge \
-	cmm dpa-app fmc kmod-leds-lp5812 kmod-sfp-led fancontrol
+	cmm dpa-app fmc kmod-leds-lp5812 kmod-sfp-led fancontrol \
+	luci-ssl luci-app-statistics luci-app-attendedsysupgrade \
+	kmod-wireguard wireguard-tools luci-proto-wireguard \
+	strongswan strongswan-default strongswan-mod-openssl openvpn-openssl luci-app-openvpn tailscale \
+	sqm-scripts luci-app-sqm nlbwmon luci-app-nlbwmon \
+	adblock luci-app-adblock https-dns-proxy luci-app-https-dns-proxy \
+	banip luci-app-banip \
+	vnstat2 luci-app-vnstat2 htop iftop mtr tcpdump iperf3 \
+	ethtool-full lm-sensors irqbalance \
+	ddns-scripts luci-app-ddns miniupnpd luci-app-upnp umdns \
+	etherwake watchcat ksmbd-server luci-app-ksmbd \
+	block-mount kmod-usb-storage-uas kmod-fs-exfat kmod-fs-ntfs3 \
+	kmod-fs-vfat smartmontools usbutils pciutils i2c-tools \
+	tmux vim-full curl rsync jq less bind-dig openssh-sftp-server \
+	sgdisk file ip-full resize2fs
   KERNEL_NAME := Image
   KERNEL := kernel-bin | gzip
+  FILESYSTEMS := ext4
   MONO_BOOTFS_SIZE := 64
+  MONO_ROOTFS_PART := 30208
   IMAGES := emmc.img.gz
   IMAGE/emmc.img.gz := mono-bootfs | mono-emmc-img | gzip | append-metadata
 endef
