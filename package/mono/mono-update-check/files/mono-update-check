@@ -10,7 +10,7 @@
 URL=$(uci -q get mono-update.check.url)
 MODE=$(uci -q get mono-update.check.mode)
 STATE=/tmp/mono-update-available
-PUBKEY=/etc/mono-release.pub
+KEYDIR=/etc/mono-keys      # every trusted release pubkey (primary + rotation)
 
 [ -n "$URL" ] || exit 0
 
@@ -68,7 +68,7 @@ echo "$TAG $SYSUPGRADE_URL" > "$STATE"
 [ "$MODE" = "auto" ] || exit 0
 
 # --- auto mode: signature-gated, RAM-guarded flash ---------------------
-[ -f "$PUBKEY" ] || { logger -t mono-update "no $PUBKEY, refusing auto-flash"; exit 1; }
+[ -n "$(ls "$KEYDIR"/*.pub 2>/dev/null)" ] || { logger -t mono-update "no keys in $KEYDIR, refusing auto-flash"; exit 1; }
 command -v usign >/dev/null 2>&1 || { logger -t mono-update "usign missing, refusing"; exit 1; }
 
 # The whole image lives in a ramdisk during sysupgrade; don't start if RAM
@@ -89,8 +89,16 @@ fail() { logger -t mono-update "$1"; rm -rf "$TMP"; exit 1; }
 
 fetch "$DIR/sha256sums"     "$TMP/sha256sums"     || fail "cannot fetch sha256sums"
 fetch "$DIR/sha256sums.sig" "$TMP/sha256sums.sig" || fail "cannot fetch signature"
-usign -V -m "$TMP/sha256sums" -x "$TMP/sha256sums.sig" -p "$PUBKEY" \
-	|| fail "signature verification FAILED - refusing $TAG"
+# Accept the signature if ANY trusted key verifies it (primary or a
+# pre-baked rotation key), so losing the primary key never strands devices.
+ok=0
+for k in "$KEYDIR"/*.pub; do
+	[ -f "$k" ] || continue
+	if usign -V -m "$TMP/sha256sums" -x "$TMP/sha256sums.sig" -p "$k" 2>/dev/null; then
+		ok=1; break
+	fi
+done
+[ "$ok" = 1 ] || fail "signature verification FAILED against all trusted keys - refusing $TAG"
 
 WANT=$(awk -v n="$IMG_NAME" '$2==n || $2=="*"n {print $1}' "$TMP/sha256sums" | head -1)
 [ -n "$WANT" ] || fail "image $IMG_NAME not in signed hash list"

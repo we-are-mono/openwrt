@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=mono-update-check
 PKG_VERSION:=1.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 PKG_LICENSE:=GPL-2.0
 
 include $(INCLUDE_DIR)/package.mk
@@ -52,9 +52,12 @@ define Package/mono-update-check/install
 	$(INSTALL_BIN) ./files/mono-update-check $(1)/usr/sbin/
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/90-mono-update-cron $(1)/etc/uci-defaults/
-	# Public half of the offline release-signing key; the trust anchor
-	# for auto-mode. Private key never leaves the release host.
-	$(INSTALL_DATA) ./files/mono-release.pub $(1)/etc/mono-release.pub
+	# Trusted release signing keys (public halves): the primary key used
+	# nightly, plus an offline rotation key so a lost primary never strands
+	# the fleet. Private halves never leave the release host / offline media.
+	$(INSTALL_DIR) $(1)/etc/mono-keys
+	$(INSTALL_DATA) ./files/mono-release.pub $(1)/etc/mono-keys/mono-release.pub
+	$(INSTALL_DATA) ./files/mono-rotation.pub $(1)/etc/mono-keys/mono-rotation.pub
 endef
 
 $(eval $(call BuildPackage,mono-update-check))
