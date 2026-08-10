@@ -26,11 +26,19 @@ remove_uri_prefix=$(subst git://,,$(subst http://,,$(subst https://,,$(1))))
 sanitize_uri=$(call qstrip,$(subst @,_,$(subst :,_,$(subst .,_,$(subst -,_,$(subst /,_,$(1)))))))
 
 ifneq ($(call qstrip,$(CONFIG_KERNEL_GIT_CLONE_URI)),)
-  LINUX_VERSION:=$(call sanitize_uri,$(call remove_uri_prefix,$(CONFIG_KERNEL_GIT_CLONE_URI)))
-  ifeq ($(call qstrip,$(CONFIG_KERNEL_GIT_REF)),)
-    CONFIG_KERNEL_GIT_REF:=HEAD
+  # A target may set KERNEL_GIT_LINUX_VERSION to a real kernel version to
+  # use instead of the sanitized URI+ref. The sanitized fallback is not a
+  # valid apk package version (must start with a digit), so any target
+  # using a git kernel with apk packaging needs this set.
+  ifneq ($(KERNEL_GIT_LINUX_VERSION),)
+    LINUX_VERSION:=$(KERNEL_GIT_LINUX_VERSION)
+  else
+    LINUX_VERSION:=$(call sanitize_uri,$(call remove_uri_prefix,$(CONFIG_KERNEL_GIT_CLONE_URI)))
+    ifeq ($(call qstrip,$(CONFIG_KERNEL_GIT_REF)),)
+      CONFIG_KERNEL_GIT_REF:=HEAD
+    endif
+    LINUX_VERSION:=$(LINUX_VERSION)-$(call sanitize_uri,$(CONFIG_KERNEL_GIT_REF))
   endif
-  LINUX_VERSION:=$(LINUX_VERSION)-$(call sanitize_uri,$(CONFIG_KERNEL_GIT_REF))
 else
 ifdef KERNEL_PATCHVER
   LINUX_VERSION:=$(KERNEL_PATCHVER)$(strip $(LINUX_VERSION-$(KERNEL_PATCHVER)))
