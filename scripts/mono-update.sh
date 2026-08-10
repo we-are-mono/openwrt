@@ -98,4 +98,12 @@ else
 	echo "mono-update: MONO_PUBLISH_DEST unset, artifacts staged in $OUT only"
 fi
 
+# Push the rebased branch and release tag when a 'mono' remote is
+# configured (machine-local in .git/config; nothing committed here).
+if git remote get-url mono >/dev/null 2>&1; then
+	echo "mono-update: pushing $BRANCH and $RELTAG"
+	git push --force-with-lease mono "$BRANCH"
+	git push -f mono "$RELTAG"
+fi
+
 echo "mono-update: done - $RELTAG"
