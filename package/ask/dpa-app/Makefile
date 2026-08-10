@@ -68,8 +68,9 @@ define Package/dpa-app/install
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/dpa_app/files/etc/cdx_pcd.xml $(1)/etc/
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/dpa_app/files/etc/cdx_sp.xml $(1)/etc/
 	$(INSTALL_DIR) $(1)/etc/cdx_cfg
-	$(foreach cfg,$(wildcard $(PKG_BUILD_DIR)/config/*/cdx_cfg.xml), \
-		$(INSTALL_DATA) $(cfg) $(1)/etc/cdx_cfg/$(notdir $(patsubst %/cdx_cfg.xml,%,$(cfg))).xml; )
+	for cfg in $(PKG_BUILD_DIR)/config/*/cdx_cfg.xml; do \
+		$(INSTALL_DATA) $$$$cfg $(1)/etc/cdx_cfg/$$$$(basename $$$$(dirname $$$$cfg)).xml; \
+	done
 	$(INSTALL_DIR) $(1)/lib/preinit
 	$(INSTALL_DATA) ./files/81_cdx_cfg_select $(1)/lib/preinit/
 endef
