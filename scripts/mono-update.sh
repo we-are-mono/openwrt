@@ -104,6 +104,17 @@ if git remote get-url mono >/dev/null 2>&1; then
 	echo "mono-update: pushing $BRANCH and $RELTAG"
 	git push --force-with-lease mono "$BRANCH"
 	git push -f mono "$RELTAG"
+
+	# Mirror the release on the forge with the flashables attached.
+	# Repo derived from the remote URL; failure is reported, not fatal.
+	if command -v gh >/dev/null 2>&1; then
+		REPO=$(git remote get-url mono | sed -E 's#(git@[^:]+:|https://[^/]+/)##; s#\.git$##')
+		gh release create "$RELTAG" --repo "$REPO" \
+			--title "$RELTAG" \
+			--notes "Automated release tracking OpenWrt $LATEST." \
+			"$OUT"/*-sysupgrade.bin "$OUT"/*-emmc.img.gz "$OUT/sha256sums" \
+			|| echo "mono-update: WARNING: GitHub release failed" >&2
+	fi
 fi
 
 echo "mono-update: done - $RELTAG"
