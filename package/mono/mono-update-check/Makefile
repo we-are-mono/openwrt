@@ -14,7 +14,7 @@ define Package/mono-update-check
   # usign: verify the release signature. ca-bundle: validate the server
   # TLS cert on the https fetch (both are the update trust chain, so they
   # are hard deps, not left to transitive luck from other packages).
-  DEPENDS:=@TARGET_layerscape +usign +ca-bundle
+  DEPENDS:=@TARGET_layerscape +usign +ca-bundle +curl
 endef
 
 define Package/mono-update-check/description

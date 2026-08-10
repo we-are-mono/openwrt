@@ -1,24 +1,31 @@
 #!/bin/sh
 # Compare the image's baked release tag against the server's latest.json.
-#   notify (default): log availability + drop a state file. No download.
-#   auto: verify the release SIGNATURE against the baked public key, then
+#   notify (default): report availability + drop a state file. No download.
+#   auto: verify the release SIGNATURE against the baked public keys, then
 #         the image hash against the signed hash list, then sysupgrade.
-# Trust anchor is /etc/mono-release.pub, NOT anything in latest.json - the
-# sha in the JSON is untrusted routing data.
+# Trust anchor is /etc/mono-keys, NOT anything in latest.json. Fetches use
+# curl (uclient-fetch is unreliable on large HTTPS downloads).
 . /lib/functions.sh
 
 URL=$(uci -q get mono-update.check.url)
 MODE=$(uci -q get mono-update.check.mode)
 STATE=/tmp/mono-update-available
-KEYDIR=/etc/mono-keys      # every trusted release pubkey (primary + rotation)
+KEYDIR=/etc/mono-keys
 
-[ -n "$URL" ] || exit 0
+# Print to the console AND the system log, so an interactive run is never
+# silent and cron output still lands in the log.
+say() { logger -t mono-update "$*"; echo "mono-update: $*" >&2; }
+
+[ -n "$URL" ] || { say "checking disabled - set mono-update.check.url"; exit 0; }
 
 CURRENT=$(cat /etc/mono_release 2>/dev/null || echo dev)
 BOARD=$(board_name)
 BOARD=${BOARD%-sdboot}
 
-# mono-vMAJOR.MINOR.PATCH[-rN] -> "MAJOR MINOR PATCH N" (0 when absent)
+get()   { curl -fsSL --max-time 30 "$1"; }
+fetch() { curl -fsSL --retry 3 --retry-delay 5 -o "$2" "$1"; }
+
+# mono-vMAJOR.MINOR.PATCH[-rN] -> "MAJOR MINOR PATCH N"
 ver_key() {
 	v=${1#mono-v}
 	case "$v" in *-r*) r=${v##*-r};; *) r=0;; esac
@@ -28,69 +35,59 @@ ver_key() {
 	EOF
 	echo "${a:-0} ${b:-0} ${c:-0} ${r:-0}"
 }
-
-# Is $1 strictly newer than $2? Unparseable current (e.g. "dev") => yes.
 is_newer() {
 	case "$2" in mono-v*) ;; *) return 0;; esac
 	set -- $(ver_key "$1") $(ver_key "$2")
 	i=1
 	while [ $i -le 4 ]; do
-		eval "r=\$$i; c=\$$((i + 4))"
-		[ "$r" -gt "$c" ] && return 0
-		[ "$r" -lt "$c" ] && return 1
+		eval "rr=\$$i; cc=\$$((i + 4))"
+		[ "$rr" -gt "$cc" ] && return 0
+		[ "$rr" -lt "$cc" ] && return 1
 		i=$((i + 1))
 	done
 	return 1
 }
 
-JSON=$(wget -q -T 30 -O - "$URL/latest.json") || {
-	logger -t mono-update "cannot fetch $URL/latest.json"
-	exit 0
-}
+JSON=$(get "$URL/latest.json") || { say "cannot reach update server ($URL)"; exit 0; }
 TAG=$(echo "$JSON" | jsonfilter -e '@.tag')
 SYSUPGRADE_URL=$(echo "$JSON" | jsonfilter -e "@.devices['$BOARD'].sysupgrade")
 
-[ -n "$SYSUPGRADE_URL" ] || {
-	logger -t mono-update "no image for board $BOARD in latest.json"
-	exit 0
-}
-[ -n "$TAG" ] || exit 0
+[ -n "$SYSUPGRADE_URL" ] || { say "no image for board $BOARD in latest.json"; exit 0; }
+[ -n "$TAG" ] || { say "malformed server response"; exit 0; }
 
 if ! is_newer "$TAG" "$CURRENT"; then
-	rm -f "$STATE"           # up to date or a refused downgrade
-	[ "$TAG" = "$CURRENT" ] || logger -t mono-update "ignoring non-forward $TAG (running $CURRENT)"
+	rm -f "$STATE"
+	if [ "$TAG" = "$CURRENT" ]; then
+		say "up to date ($CURRENT)"
+	else
+		say "server offers older $TAG, keeping $CURRENT"
+	fi
 	exit 0
 fi
 
-logger -t mono-update "update available: $TAG (running $CURRENT)"
+say "update available: $TAG (running $CURRENT)"
 echo "$TAG $SYSUPGRADE_URL" > "$STATE"
 
-[ "$MODE" = "auto" ] || exit 0
+if [ "$MODE" != "auto" ]; then
+	say "notify mode - to install: sysupgrade $SYSUPGRADE_URL"
+	exit 0
+fi
 
 # --- auto mode: signature-gated, RAM-guarded flash ---------------------
-[ -n "$(ls "$KEYDIR"/*.pub 2>/dev/null)" ] || { logger -t mono-update "no keys in $KEYDIR, refusing auto-flash"; exit 1; }
-command -v usign >/dev/null 2>&1 || { logger -t mono-update "usign missing, refusing"; exit 1; }
-
-# The whole image lives in a ramdisk during sysupgrade; don't start if RAM
-# is tight (protects lean variants; the DK has 8 GB and passes trivially).
+[ -n "$(ls "$KEYDIR"/*.pub 2>/dev/null)" ] || { say "no keys in $KEYDIR, refusing auto-flash"; exit 1; }
+command -v usign >/dev/null 2>&1 || { say "usign missing, refusing"; exit 1; }
 AVAIL=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
-[ -n "$AVAIL" ] && [ "$AVAIL" -lt 786432 ] && {
-	logger -t mono-update "MemAvailable ${AVAIL}KB too low, skipping auto-flash"
-	exit 1
-}
+[ -n "$AVAIL" ] && [ "$AVAIL" -lt 786432 ] && { say "low memory (${AVAIL}KB), skipping auto-flash"; exit 1; }
 
 DIR=${SYSUPGRADE_URL%/*}
 IMG_NAME=${SYSUPGRADE_URL##*/}
 TMP=/tmp/mono-update
 rm -rf "$TMP"; mkdir -p "$TMP"
+fail() { say "$1"; rm -rf "$TMP"; exit 1; }
 
-fetch() { wget -q -T 300 -O "$2" "$1"; }
-fail() { logger -t mono-update "$1"; rm -rf "$TMP"; exit 1; }
-
+say "verifying signature for $TAG..."
 fetch "$DIR/sha256sums"     "$TMP/sha256sums"     || fail "cannot fetch sha256sums"
 fetch "$DIR/sha256sums.sig" "$TMP/sha256sums.sig" || fail "cannot fetch signature"
-# Accept the signature if ANY trusted key verifies it (primary or a
-# pre-baked rotation key), so losing the primary key never strands devices.
 ok=0
 for k in "$KEYDIR"/*.pub; do
 	[ -f "$k" ] || continue
@@ -103,9 +100,10 @@ done
 WANT=$(awk -v n="$IMG_NAME" '$2==n || $2=="*"n {print $1}' "$TMP/sha256sums" | head -1)
 [ -n "$WANT" ] || fail "image $IMG_NAME not in signed hash list"
 
+say "signature OK - downloading $TAG (this takes a minute)..."
 fetch "$SYSUPGRADE_URL" "$TMP/image.bin" || fail "image download failed"
 GOT=$(sha256sum "$TMP/image.bin" | cut -d' ' -f1)
-[ "$GOT" = "$WANT" ] || fail "image hash mismatch (signed list) - refusing"
+[ "$GOT" = "$WANT" ] || fail "image hash mismatch against signed list - refusing"
 
-logger -t mono-update "verified $TAG, applying via sysupgrade"
+say "verified $TAG - applying via sysupgrade, the device will reboot now"
 exec sysupgrade "$TMP/image.bin"
