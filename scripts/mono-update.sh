@@ -73,19 +73,26 @@ fi
 # (mono-update-check reads it at build time). Dropped again on failure.
 git tag -f "$RELTAG"
 
-cleanup_fail() {
+# From here on ANY nonzero exit - build, artifact staging, publish, push -
+# removes the tag, so the next run recomputes this same revision and
+# retries instead of seeing a tag at branch head and skipping. Without
+# this a failed rsync would leave the tag and wedge the release. set -e
+# turns a failed command into an exit, which fires the trap.
+on_exit() {
+	rc=$?
+	[ "$rc" -eq 0 ] && return 0
 	git tag -d "$RELTAG" >/dev/null 2>&1 || true
-	echo "mono-update: BUILD FAILED for $RELTAG" >&2
-	exit 1
+	echo "mono-update: FAILED ($RELTAG, rc=$rc) - tag dropped, will retry next run" >&2
 }
+trap on_exit EXIT
 
 cp configs/mono_gateway-dk.seed .config
-make defconfig || cleanup_fail
+make defconfig
 # mono-update-check bakes the release tag into /etc/mono_release at its
 # build time; force it fresh or every image ships the stale identity of
 # the package's first build (and auto-mode devices re-flash forever).
-make package/mono/mono-update-check/clean package/mono/mono-update-check/compile || cleanup_fail
-make -j"$(nproc)" world || cleanup_fail
+make package/mono/mono-update-check/clean package/mono/mono-update-check/compile
+make -j"$(nproc)" world
 
 OUT="releases/$RELTAG"
 BINDIR=bin/targets/layerscape/armv8_64b
