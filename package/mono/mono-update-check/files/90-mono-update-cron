@@ -1,0 +1,10 @@
+#!/bin/sh
+# Daily update check at a fixed-per-device random minute/hour so a fleet
+# doesn't stampede the server at midnight.
+grep -q mono-update-check /etc/crontabs/root 2>/dev/null && exit 0
+M=$(( $(hexdump -n2 -e '"%u"' /dev/urandom) % 60 ))
+H=$(( $(hexdump -n2 -e '"%u"' /dev/urandom) % 24 ))
+mkdir -p /etc/crontabs
+echo "$M $H * * * /usr/sbin/mono-update-check" >> /etc/crontabs/root
+/etc/init.d/cron restart 2>/dev/null
+exit 0
