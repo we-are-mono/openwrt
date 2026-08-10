@@ -67,10 +67,41 @@ platform_copy_config_sdboot() {
 		umount /mnt
 	fi
 }
+platform_do_upgrade_mono() {
+	local tar_file="$1"
+	local board_dir=$(tar tf $tar_file | grep -m 1 '^sysupgrade-.*/$')
+	board_dir=${board_dir%/}
+
+	# The "kernel" member is the complete boot partition image
+	# (Image.gz + dtb + extlinux.conf), so the device tree and boot
+	# config always match the kernel they were built with. The GPT
+	# and the raw boot firmware in the first 32 MiB are never touched.
+	echo "Writing boot partition..."
+	tar xf $tar_file ${board_dir}/kernel -O | dd of=/dev/mmcblk0p1 bs=1M conv=fsync 2>/dev/null
+	echo "Writing rootfs..."
+	tar xf $tar_file ${board_dir}/root -O | dd of=/dev/mmcblk0p2 bs=1M conv=fsync 2>/dev/null
+	# rootfs ships at 1.5G; the uci-defaults script in it re-expands
+	# to the full partition on first boot
+}
+
+platform_copy_config_mono() {
+	mkdir -p /tmp/new_root
+	if mount -t ext4 -o rw,noatime /dev/mmcblk0p2 /tmp/new_root; then
+		echo "Saving config backup to new rootfs..."
+		cp -af "$UPGRADE_BACKUP" /tmp/new_root/sysupgrade.tgz
+		umount /tmp/new_root
+	fi
+}
+
 platform_copy_config() {
 	local board=$(board_name)
 
 	case "$board" in
+	mono,gateway-dk | \
+	mono,gateway-dk-sdboot)
+		platform_copy_config_mono
+		return 0
+		;;
 	fsl,ls1012a-frwy-sdboot | \
 	fsl,ls1021a-iot-sdboot | \
 	fsl,ls1021a-twr-sdboot | \
@@ -91,6 +122,10 @@ platform_check_image() {
 	traverse,ten64)
 		nand_do_platform_check "ten64-mtd" $1
 		return $?
+		;;
+	mono,gateway-dk | \
+	mono,gateway-dk-sdboot)
+		return 0
 		;;
 	fsl,ls1012a-frdm | \
 	fsl,ls1012a-frwy-sdboot | \
@@ -128,6 +163,11 @@ platform_do_upgrade() {
 	touch /var/lock/fw_printenv.lock
 
 	case "$board" in
+	mono,gateway-dk | \
+	mono,gateway-dk-sdboot)
+		platform_do_upgrade_mono "$1"
+		return 0
+		;;
 	traverse,ten64)
 		platform_do_upgrade_traverse_slotubi "${1}"
 		;;

@@ -425,6 +425,22 @@ define Build/mono-emmc-img
 		$(MONO_BOOTFS_SIZE) $(MONO_ROOTFS_PART)
 endef
 
+# Same resize-metadata prep as the eMMC image (make_ext4fs output
+# cannot be grown online); the boot partition blob travels as the
+# "kernel" member so dtb and extlinux.conf always match the kernel.
+define Build/mono-sysupgrade
+	cp $(IMAGE_ROOTFS) $@.rootfs
+	e2fsck -fy $@.rootfs || true
+	truncate -s 1536M $@.rootfs
+	resize2fs $@.rootfs
+	sh $(TOPDIR)/scripts/sysupgrade-tar.sh \
+		--board $(subst _,$(comma),$(DEVICE_NAME)) \
+		--kernel $@.bootfs \
+		--rootfs $@.rootfs \
+		$@
+	rm -f $@.rootfs
+endef
+
 define Device/mono_gateway-dk
   DEVICE_VENDOR := Mono
   DEVICE_MODEL := Gateway DK
@@ -449,8 +465,10 @@ define Device/mono_gateway-dk
   FILESYSTEMS := ext4
   MONO_BOOTFS_SIZE := 64
   MONO_ROOTFS_PART := 30208
-  IMAGES := emmc.img.gz
+  SUPPORTED_DEVICES := mono,gateway-dk mono,gateway-dk-sdboot
+  IMAGES := emmc.img.gz sysupgrade.bin
   IMAGE/emmc.img.gz := mono-bootfs | mono-emmc-img | gzip | append-metadata
+  IMAGE/sysupgrade.bin := mono-bootfs | mono-sysupgrade | append-metadata
 endef
 TARGET_DEVICES += mono_gateway-dk
 
