@@ -39,28 +39,25 @@ BASE=$(git tag --merged "$BRANCH" 'v[0-9]*' | sort -V | tail -1)
 SERIES=${BASE%.*}
 LATEST=$(git tag -l "${SERIES}.*" | sort -V | tail -1)
 
-# Two release triggers: a new upstream stable tag (mono-vX.Y.Z), or new
-# commits on the branch since the last release of the current base -
-# ASK pin bumps, package fixes - which cut a revision (mono-vX.Y.Z-rN).
+# Every release is mono-vX.Y.Z-rN, numbered from r1. Two triggers: a new
+# upstream stable tag (fresh base, counter restarts at r1), or new commits
+# on the branch since the last release of the current base (next rN) -
+# ASK pin bumps, package fixes.
 if [ "$LATEST" != "$BASE" ]; then
-	RELTAG="mono-$LATEST"
-	echo "mono-update: $BASE -> $LATEST ($RELTAG)"
+	echo "mono-update: $BASE -> $LATEST"
 else
-	LASTTAG=$(git tag -l "mono-$BASE" "mono-$BASE-r*" | sort -V | tail -1)
+	LASTTAG=$(git tag -l "mono-$BASE-r*" | sed 's/.*-r//' | sort -n | tail -1)
 	if [ -n "$LASTTAG" ] && [ -z "$FORCE" ] && \
-	   [ "$(git rev-parse "$LASTTAG^{commit}")" = "$(git rev-parse "$BRANCH")" ]; then
-		echo "mono-update: up to date ($LASTTAG at branch head)"
+	   [ "$(git rev-parse "mono-$BASE-r$LASTTAG^{commit}")" = "$(git rev-parse "$BRANCH")" ]; then
+		echo "mono-update: up to date (mono-$BASE-r$LASTTAG at branch head)"
 		exit 0
 	fi
-	if [ -z "$LASTTAG" ]; then
-		RELTAG="mono-$BASE"
-	elif [ "$LASTTAG" = "mono-$BASE" ]; then
-		RELTAG="mono-$BASE-r2"
-	else
-		RELTAG="mono-$BASE-r$(( ${LASTTAG##*-r} + 1 ))"
-	fi
-	echo "mono-update: new commits on $BASE -> $RELTAG"
 fi
+
+# Next revision of the release base: highest existing -rN plus one.
+LAST=$(git tag -l "mono-$LATEST-r*" | sed 's/.*-r//' | sort -n | tail -1)
+RELTAG="mono-$LATEST-r$(( ${LAST:-0} + 1 ))"
+echo "mono-update: release $RELTAG"
 [ -n "$DRY_RUN" ] && exit 0
 
 if [ "$LATEST" != "$BASE" ]; then
