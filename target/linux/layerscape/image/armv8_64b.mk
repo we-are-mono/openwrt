@@ -406,3 +406,35 @@ define Device/traverse_ten64_mtd
 endef
 TARGET_DEVICES += traverse_ten64_mtd
 
+# Boot partition for the Mono Gateway: ext4 with /boot/extlinux for the
+# QSPI/eMMC U-Boot's `sysboot mmc 0:1 any ... /boot/extlinux/extlinux.conf`
+define Build/mono-bootfs
+	rm -rf $@.bootdir $@.bootfs
+	mkdir -p $@.bootdir/boot/extlinux
+	$(CP) $(IMAGE_KERNEL) $@.bootdir/boot/Image.gz
+	$(CP) $(DEVICE_DTS_DIR)/$(DEVICE_DTS).dtb $@.bootdir/boot/
+	printf 'label OpenWrt\n\tkernel /boot/Image.gz\n\tfdt /boot/%s.dtb\n\tappend root=/dev/mmcblk0p2 rootwait console=ttyS0,115200 earlycon=uart8250,mmio,0x21c0500\n' \
+		"$(DEVICE_DTS)" > $@.bootdir/boot/extlinux/extlinux.conf
+	truncate -s $(MONO_BOOTFS_SIZE)M $@.bootfs
+	$(STAGING_DIR_HOST)/bin/mkfs.ext4 -F -L boot -d $@.bootdir $@.bootfs
+endef
+
+define Build/mono-emmc-img
+	rm -f $@
+	./gen_mono_emmc_img.sh $@ $@.bootfs $(IMAGE_ROOTFS) \
+		$(MONO_BOOTFS_SIZE) $(CONFIG_TARGET_ROOTFS_PARTSIZE)
+endef
+
+define Device/mono_gateway-dk
+  DEVICE_VENDOR := Mono
+  DEVICE_MODEL := Gateway DK
+  DEVICE_PACKAGES := kmod-ask-cdx kmod-ask-fci kmod-ask-auto-bridge \
+	cmm dpa-app fmc
+  KERNEL_NAME := Image
+  KERNEL := kernel-bin | gzip
+  MONO_BOOTFS_SIZE := 64
+  IMAGES := emmc.img.gz
+  IMAGE/emmc.img.gz := mono-bootfs | mono-emmc-img | gzip | append-metadata
+endef
+TARGET_DEVICES += mono_gateway-dk
+
