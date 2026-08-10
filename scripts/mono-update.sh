@@ -87,7 +87,7 @@ make defconfig || cleanup_fail
 # mono-update-check bakes the release tag into /etc/mono_release at its
 # build time; force it fresh or every image ships the stale identity of
 # the package's first build (and auto-mode devices re-flash forever).
-make package/mono/mono-update-check/{clean,compile} || cleanup_fail
+make package/mono/mono-update-check/clean package/mono/mono-update-check/compile || cleanup_fail
 make -j"$(nproc)" world || cleanup_fail
 
 OUT="releases/$RELTAG"
