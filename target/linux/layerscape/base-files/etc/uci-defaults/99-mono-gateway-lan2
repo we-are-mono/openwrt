@@ -1,0 +1,22 @@
+#!/bin/sh
+# Put the Mono Gateway's second LAN (eth4 / 192.168.2.1) into the lan
+# firewall zone so it gets the same forwarding/NAT policy as br-lan.
+. /lib/functions.sh
+
+[ "$(board_name)" = "mono,gateway-dk" ] || [ "$(board_name)" = "mono,gateway-dk-sdboot" ] || exit 0
+
+uci -q get firewall.@zone[0] >/dev/null || exit 0
+uci add_list firewall.@zone[0].network='lan2'
+uci commit firewall
+
+# DHCP pool for lan2 (br-lan gets the stock 'lan' pool already)
+uci -q get dhcp.lan2 >/dev/null || {
+	uci set dhcp.lan2=dhcp
+	uci set dhcp.lan2.interface='lan2'
+	uci set dhcp.lan2.start='100'
+	uci set dhcp.lan2.limit='150'
+	uci set dhcp.lan2.leasetime='12h'
+	uci commit dhcp
+}
+
+exit 0

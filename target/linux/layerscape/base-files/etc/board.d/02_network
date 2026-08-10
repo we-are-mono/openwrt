@@ -13,6 +13,13 @@ case "$(board_name)" in
 		ucidef_set_interface_lan "eth0 eth1 eth2 eth3"
 		ucidef_set_interface_wan "eth6"
 		;;
+	mono,gateway-dk|\
+	mono,gateway-dk-sdboot)
+		ucidef_set_interface_lan "eth0 eth1 eth2"
+		ucidef_set_interface_wan "eth3"
+		ucidef_set_interface "lan2" device "eth4" protocol "static" \
+			ipaddr "192.168.2.1" netmask "255.255.255.0"
+		;;
 esac
 
 board_config_flush
