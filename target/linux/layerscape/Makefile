@@ -8,6 +8,9 @@ BOARD:=layerscape
 BOARDNAME:=NXP Layerscape
 
 KERNEL_PATCHVER:=6.12
+# Real version of the NXP vendor kernel fetched via KERNEL_GIT_CLONE_URI;
+# names the build dir and gives kmod packages an apk-valid version.
+KERNEL_GIT_LINUX_VERSION:=6.12.49
 
 FEATURES:=squashfs nand usb pcie gpio fpu ubifs ext4 rootfs-part boot-part
 SUBTARGETS:=armv8_64b armv7
@@ -20,5 +23,53 @@ include $(INCLUDE_DIR)/target.mk
 
 DEFAULT_PACKAGES += kmod-usb3 kmod-usb-dwc3 kmod-usb-storage \
   mkf2fs e2fsprogs partx-utils
+
+# ASK hardware-offload integration.
+#
+# The offload stack requires the NXP vendor kernel (sdk_dpaa/sdk_fman/qbman),
+# selected via CONFIG_KERNEL_GIT_CLONE_URI. In that mode OpenWrt skips all
+# kernel patching (generic + platform), so it is restored here: the ASK
+# repository is fetched at a pinned revision and its kernel patch series is
+# applied, followed by the OpenWrt-integration patches in patches-ask/
+# (cherry-picks from the generic stack that OpenWrt userspace depends on).
+ASK_VERSION:=b4c31a46dfb7b03984ebfa3a8eabd06ccbc0cc91
+ASK_SOURCE:=ask-$(ASK_VERSION).tar.xz
+ASK_SUBDIR:=ask-$(ASK_VERSION)
+
+ifeq ($(TARGET_BUILD),1)
+ifneq ($(call qstrip,$(CONFIG_KERNEL_GIT_CLONE_URI)),)
+
+  define Download/ask
+    URL:=https://github.com/we-are-mono/ASK
+    PROTO:=git
+    SOURCE_VERSION:=$(ASK_VERSION)
+    FILE:=$(ASK_SOURCE)
+    SUBDIR:=$(ASK_SUBDIR)
+  endef
+  $(eval $(call Download,ask))
+
+  KERNEL_FILE_DEPENDS+=$(PLATFORM_DIR)/patches-ask $(PLATFORM_DIR)/files-ask
+
+  # 0*.patch only: 999-* is the legacy 5.4 reference monolith, never applied.
+  # files-ask/ overlays board files (mono-gateway-dk.dts, vendored from the
+  # meta-mono layer) onto the vendor tree; the dtb-y append is idempotent.
+  define Kernel/Prepare
+	$(call Kernel/Prepare/Default)
+	rm -rf $(KERNEL_BUILD_DIR)/$(ASK_SUBDIR) $(KERNEL_BUILD_DIR)/ask-kernel-patches
+	xzcat $(DL_DIR)/$(ASK_SOURCE) | $(TAR) -C $(KERNEL_BUILD_DIR) -xf -
+	mkdir -p $(KERNEL_BUILD_DIR)/ask-kernel-patches
+	$(CP) $(KERNEL_BUILD_DIR)/$(ASK_SUBDIR)/patches/kernel/0*.patch $(KERNEL_BUILD_DIR)/ask-kernel-patches/
+	$(call PatchDir,$(LINUX_DIR),$(KERNEL_BUILD_DIR)/ask-kernel-patches,ask/)
+	$(call PatchDir,$(LINUX_DIR),$(PLATFORM_DIR)/patches-ask,ask-openwrt/)
+	$(CP) $(PLATFORM_DIR)/files-ask/. $(LINUX_DIR)/
+	grep -q "mono-gateway-dk" $(LINUX_DIR)/arch/arm64/boot/dts/freescale/Makefile || \
+		echo 'dtb-y += mono-gateway-dk.dtb' \
+			>> $(LINUX_DIR)/arch/arm64/boot/dts/freescale/Makefile
+  endef
+
+$(STAMP_PREPARED): $(DL_DIR)/$(ASK_SOURCE)
+
+endif
+endif
 
 $(eval $(call BuildTarget))
