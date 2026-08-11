@@ -35,6 +35,12 @@ endef
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
 	xzcat $(DL_DIR)/$(ASK_SOURCE) | $(TAR) -C $(PKG_BUILD_DIR) --strip-components=1 -xf -
+	# The official cmm build uses -Wno-error. The vendor Makefile hardcodes
+	# -Werror and our CFLAGS come from the environment (appended *before* the
+	# vendor's), so a -Wno-error we pass would be overridden - neutralise it
+	# at the source instead. The extra feature defines below light up code
+	# (module_stat/module_qm/policer) that the base build never warned on.
+	sed -i 's/-Werror/-Wno-error/g' $(PKG_BUILD_DIR)/cmm/Makefile
 endef
 
 # CFLAGS/LDFLAGS go through the environment, not the command line: both
@@ -44,7 +50,7 @@ define Build/Compile
 	+CFLAGS="$(TARGET_CFLAGS)" \
 	$(MAKE) -C $(PKG_BUILD_DIR)/fci/lib \
 		CC="$(TARGET_CC)" AR="$(TARGET_AR)"
-	+CFLAGS="$(TARGET_CFLAGS) $(TARGET_CPPFLAGS) -DVLAN_FILTER" \
+	+CFLAGS="$(TARGET_CFLAGS) $(TARGET_CPPFLAGS) -DLS1043 -DFLOW_STATS -DWIFI_ENABLE -DAUTO_BRIDGE -DSEC_PROFILE_SUPPORT -DUSE_QOSCONNMARK -DENABLE_INGRESS_QOS -DIPSEC_NO_FLOW_CACHE -DVLAN_FILTER" \
 	LDFLAGS="$(TARGET_LDFLAGS)" \
 	$(MAKE) -C $(PKG_BUILD_DIR)/cmm \
 		CC="$(TARGET_CC)" \
