@@ -1,0 +1,2 @@
+# Preserve the update anti-rollback floor across sysupgrade.
+/etc/mono-update.state

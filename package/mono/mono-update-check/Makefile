@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=mono-update-check
 PKG_VERSION:=1.0
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 PKG_LICENSE:=GPL-2.0
 
 include $(INCLUDE_DIR)/package.mk
@@ -58,6 +58,9 @@ define Package/mono-update-check/install
 	$(INSTALL_DIR) $(1)/etc/mono-keys
 	$(INSTALL_DATA) ./files/mono-release.pub $(1)/etc/mono-keys/mono-release.pub
 	$(INSTALL_DATA) ./files/mono-rotation.pub $(1)/etc/mono-keys/mono-rotation.pub
+	# Preserve the anti-rollback floor across sysupgrade.
+	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
+	$(INSTALL_DATA) ./files/mono-update.keep $(1)/lib/upgrade/keep.d/mono-update
 endef
 
 $(eval $(call BuildPackage,mono-update-check))
