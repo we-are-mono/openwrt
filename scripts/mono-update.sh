@@ -3,10 +3,15 @@
 # and stage release artifacts. Designed for cron: quiet no-op when
 # already current, hard stop (nonzero, clean tree) on conflicts.
 #
-# No infrastructure knowledge lives here. Publishing only happens when
-# the environment provides:
-#   MONO_PUBLISH_DEST  rsync destination (e.g. host:/srv/openwrt)
-#   MONO_PUBLISH_URL   public base URL written into latest.json
+# Builds and stages releases/<tag>/, then releases it. When MONO_SIGN_KEY is
+# set (the nightly patch-release host) it auto-signs and publishes via:
+#   scripts/mono-sign-release.sh <tag>     (needs MONO_SIGN_KEY)
+#   scripts/mono-publish-release.sh <tag>  (needs MONO_PUBLISH_DEST; re-verifies, refuses unsigned)
+# When MONO_SIGN_KEY is unset it stages only and prints those two steps, to run
+# where the key lives (a new minor, or an off-host signing setup). Publishing
+# re-verifies the signatures against the fleet's baked keys, so a wrong-key run
+# fails and drops the tag instead of shipping something every device rejects.
+# MONO_PUBLISH_URL is the public base URL baked into latest.json.
 #
 # Usage: scripts/mono-update.sh [--dry-run] [--force]
 #   --force: release the current base even when already up to date
@@ -76,11 +81,11 @@ fi
 # (mono-update-check reads it at build time). Dropped again on failure.
 git tag -f "$RELTAG"
 
-# From here on ANY nonzero exit - build, artifact staging, publish, push -
-# removes the tag, so the next run recomputes this same revision and
-# retries instead of seeing a tag at branch head and skipping. Without
-# this a failed rsync would leave the tag and wedge the release. set -e
-# turns a failed command into an exit, which fires the trap.
+# From here on ANY nonzero exit - build, staging, sign, or publish - removes
+# the tag, so the next run recomputes this same revision and retries instead
+# of seeing a tag at branch head and skipping. Without this a failed publish
+# would leave the tag and wedge the release. set -e turns a failed command
+# into an exit, which fires the trap.
 on_exit() {
 	rc=$?
 	[ "$rc" -eq 0 ] && return 0
@@ -108,15 +113,10 @@ cp "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-ext4-emmc.img.gz \
 git format-patch --quiet -o "$OUT/patches" "$LATEST..$BRANCH"
 (cd "$OUT" && sha256sum *.img.gz *.bin > sha256sums)
 
-# Sign the hash list. This - not the sha in latest.json - is the trust
-# anchor devices verify against the baked public key before flashing.
-USIGN=staging_dir/host/bin/usign
-if [ -n "${MONO_SIGN_KEY:-}" ] && [ -x "$USIGN" ]; then
-	"$USIGN" -S -m "$OUT/sha256sums" -s "$MONO_SIGN_KEY" -x "$OUT/sha256sums.sig"
-	echo "mono-update: signed sha256sums"
-else
-	echo "mono-update: WARNING: unsigned release (set MONO_SIGN_KEY); auto-update devices will refuse it" >&2
-fi
+# NOTE: this script no longer signs. Signing happens on the key host via
+# scripts/mono-sign-release.sh, and publishing (scripts/mono-publish-release.sh)
+# refuses to run without the signatures. Keeping the key off the build/publish
+# host means a compromise of this host is not also a signing compromise.
 
 # A real flashing tool, shipped with the release (not a two-step dd in prose).
 cat > "$OUT/flash-mono-gateway.sh" <<'FLASH'
@@ -151,36 +151,28 @@ for name, p in prof.items():
         continue
     h = hashlib.sha256(open(os.path.join(out, img), "rb").read()).hexdigest()
     devices[boards[0]] = {"sysupgrade": f"{urlbase}/{reltag}/{img}", "sha256": h}
-json.dump({"tag": reltag,
+# format_version lets the client reject a manifest shape it doesn't understand.
+json.dump({"format_version": 1,
+           "tag": reltag,
            "date": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
            "devices": devices}, sys.stdout, indent=2)
 PY
 
-if [ -n "${MONO_PUBLISH_DEST:-}" ]; then
-	echo "mono-update: publishing to $MONO_PUBLISH_DEST"
-	rsync -a "$OUT" releases/latest.json "$MONO_PUBLISH_DEST/"
+# Release it. On the nightly patch-release host the signing key is present, so
+# sign + publish run automatically. mono-publish-release.sh re-verifies both
+# signatures against the fleet's baked keys before shipping, so a wrong or
+# rotated key fails here (set -e -> trap drops the tag -> retry + alert) rather
+# than pushing a release every device would reject. Without the key on this
+# host, stage only and print the two steps to run where the key lives.
+if [ -n "${MONO_SIGN_KEY:-}" ]; then
+	scripts/mono-sign-release.sh "$RELTAG"
+	scripts/mono-publish-release.sh "$RELTAG"
+	echo "mono-update: done - $RELTAG (published)"
 else
-	echo "mono-update: MONO_PUBLISH_DEST unset, artifacts staged in $OUT only"
+	cat >&2 <<EOF
+mono-update: staged $RELTAG (MONO_SIGN_KEY not set, not published). To release it:
+  1. scripts/mono-sign-release.sh $RELTAG      # on the signing host (needs MONO_SIGN_KEY)
+  2. scripts/mono-publish-release.sh $RELTAG   # rsync + push; re-verifies, refuses unsigned
+EOF
+	echo "mono-update: done - $RELTAG (staged, not published)"
 fi
-
-# Push the rebased branch and release tag when a 'mono' remote is
-# configured (machine-local in .git/config; nothing committed here).
-if git remote get-url mono >/dev/null 2>&1; then
-	echo "mono-update: pushing $BRANCH and $RELTAG"
-	git push --force-with-lease mono "$BRANCH"
-	git push -f mono "$RELTAG"
-
-	# Mirror the release on the forge with the flashables attached.
-	# Repo derived from the remote URL; failure is reported, not fatal.
-	if command -v gh >/dev/null 2>&1; then
-		REPO=$(git remote get-url mono | sed -E 's#(git@[^:]+:|https://[^/]+/)##; s#\.git$##')
-		gh release create "$RELTAG" --repo "$REPO" \
-			--title "$RELTAG" \
-			--notes "Automated release: OpenWrt $LATEST base, branch $(git rev-parse --short "$BRANCH")." \
-			"$OUT"/*-sysupgrade.bin "$OUT"/*-emmc.img.gz \
-			"$OUT/sha256sums" "$OUT"/sha256sums.sig "$OUT/flash-mono-gateway.sh" \
-			|| echo "mono-update: WARNING: GitHub release failed" >&2
-	fi
-fi
-
-echo "mono-update: done - $RELTAG"
