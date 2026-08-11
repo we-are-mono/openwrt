@@ -1,0 +1,35 @@
+#!/bin/sh
+# Mono Gateway status LED policy (LP5812 I2C controller).
+#
+# Done in userspace, not the DTS: the lp5812 driver does not parse
+# `default-state` (it reads only reg/color/label/led-max-microamp and registers
+# with the non-_ext classdev call), and its probe never resets the chip - so it
+# leaves whatever U-Boot set. U-Boot lights status:green during boot; set the
+# steady state here instead. Runs once (uci-defaults self-deletes); the `led`
+# service then re-applies /etc/config/system on every boot.
+#
+# Scheme: green off, white a dim static "ready" light. Adjust to taste.
+. /lib/functions.sh
+
+case "$(board_name)" in
+mono,gateway-dk|mono,gateway-dk-sdboot) ;;
+*) exit 0 ;;
+esac
+
+uci -q batch <<'EOF'
+set system.led_status_green=led
+set system.led_status_green.name='Status Green'
+set system.led_status_green.sysfs='status:green'
+set system.led_status_green.trigger='none'
+set system.led_status_green.default='0'
+
+set system.led_status_white=led
+set system.led_status_white.name='Status White'
+set system.led_status_white.sysfs='status:white'
+set system.led_status_white.trigger='none'
+set system.led_status_white.default='1'
+set system.led_status_white.brightness='16'
+EOF
+uci commit system
+
+exit 0
