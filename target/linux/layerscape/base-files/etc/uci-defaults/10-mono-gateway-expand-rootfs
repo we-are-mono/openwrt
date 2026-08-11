@@ -10,6 +10,9 @@
 # uci-defaults self-delete on exit 0; this script exits NON-zero (retries
 # next boot) until the backup GPT is confirmed present, and is idempotent.
 . /lib/functions.sh
+# Reuse the validated rootfs selector from the sysupgrade platform script
+# (single source of truth for the eMMC checks; see platform.sh).
+[ -f /lib/upgrade/platform.sh ] && . /lib/upgrade/platform.sh
 
 case "$(board_name)" in
 mono,gateway-dk|mono,gateway-dk-sdboot) ;;
@@ -20,8 +23,12 @@ disk=/dev/mmcblk0
 sysfs=/sys/block/mmcblk0/size          # size in 512-byte sectors (no tools)
 rc=0
 
-# 1. grow rootfs (no-op once full)
-root_dev=$(readlink -f /dev/root 2>/dev/null)
+# 1. grow rootfs (no-op once full). Prefer the validated eMMC rootfs; fall back
+#    to the booted /dev/root, then the hardcoded node, so first boot still
+#    expands if validation is unavailable. resize2fs on the mounted root is safe.
+root_dev=""
+command -v mono_gateway_root_part >/dev/null 2>&1 && root_dev="$(mono_gateway_root_part 2>/dev/null)"
+[ -b "$root_dev" ] || root_dev=$(readlink -f /dev/root 2>/dev/null)
 [ -b "$root_dev" ] || root_dev=/dev/mmcblk0p2
 resize2fs "$root_dev" 2>&1 | logger -t mono-firstboot
 
