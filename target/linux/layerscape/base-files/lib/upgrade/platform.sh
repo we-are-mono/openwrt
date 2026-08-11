@@ -184,8 +184,7 @@ platform_copy_config() {
 	local board=$(board_name)
 
 	case "$board" in
-	mono,gateway-dk | \
-	mono,gateway-dk-sdboot)
+	mono,gateway-dk)
 		platform_copy_config_mono
 		return 0
 		;;
@@ -210,8 +209,7 @@ platform_check_image() {
 		nand_do_platform_check "ten64-mtd" $1
 		return $?
 		;;
-	mono,gateway-dk | \
-	mono,gateway-dk-sdboot)
+	mono,gateway-dk)
 		# Pre-flight: refuse before writing anything if the target eMMC
 		# does not validate, rather than failing part-way through the flash.
 		mono_gateway_root_part >/dev/null || return 1
@@ -253,8 +251,7 @@ platform_do_upgrade() {
 	touch /var/lock/fw_printenv.lock
 
 	case "$board" in
-	mono,gateway-dk | \
-	mono,gateway-dk-sdboot)
+	mono,gateway-dk)
 		platform_do_upgrade_mono "$1"
 		return $?
 		;;

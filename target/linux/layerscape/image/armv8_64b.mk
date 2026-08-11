@@ -470,6 +470,9 @@ define Device/mono_gateway-dk
   MONO_BOOTFS_SIZE := 64
   MONO_ROOTFS_PART := 30208
   MONO_EMMC_SECTORS := 62160896
+  # Keep the -sdboot alias: units flashed before 02_sysinfo_fixup stopped
+  # appending it still report mono,gateway-dk-sdboot at runtime, and sysupgrade
+  # refuses an image whose SUPPORTED_DEVICES lacks the running board name.
   SUPPORTED_DEVICES := mono,gateway-dk mono,gateway-dk-sdboot
   IMAGES := emmc.img.gz sysupgrade.bin
   IMAGE/emmc.img.gz := mono-bootfs | mono-emmc-img | gzip | append-metadata

@@ -15,7 +15,7 @@
 [ -f /lib/upgrade/platform.sh ] && . /lib/upgrade/platform.sh
 
 case "$(board_name)" in
-mono,gateway-dk|mono,gateway-dk-sdboot) ;;
+mono,gateway-dk) ;;
 *) exit 0 ;;
 esac
 

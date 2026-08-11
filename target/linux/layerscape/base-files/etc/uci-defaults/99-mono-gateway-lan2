@@ -3,7 +3,7 @@
 # firewall zone so it gets the same forwarding/NAT policy as br-lan.
 . /lib/functions.sh
 
-[ "$(board_name)" = "mono,gateway-dk" ] || [ "$(board_name)" = "mono,gateway-dk-sdboot" ] || exit 0
+[ "$(board_name)" = "mono,gateway-dk" ] || exit 0
 
 uci -q get firewall.@zone[0] >/dev/null || exit 0
 uci add_list firewall.@zone[0].network='lan2'
