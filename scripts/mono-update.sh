@@ -102,6 +102,20 @@ make defconfig
 make package/mono/mono-update-check/clean package/mono/mono-update-check/compile
 make -j"$(nproc)" world
 
+# Verify the image actually baked THIS release's identity. The OTA client and
+# the on-device anti-rollback floor trust /etc/mono_release, so a stale value
+# (the 96b2fbc610 failure: identity package not rebuilt fresh into the rootfs)
+# would make devices misreport their version and corrupt the floor. Check the
+# assembled rootfs - the source the image is packed from - and refuse to stage
+# on any mismatch (empty = could not verify = also refuse). set -e + the EXIT
+# trap then drop the tag, so the next run rebuilds instead of shipping it.
+built_id=$(cat build_dir/target-*/root-layerscape/etc/mono_release 2>/dev/null | head -1)
+if [ "$built_id" != "$RELTAG" ]; then
+	echo "mono-update: FATAL: built rootfs identity '$built_id' != $RELTAG - refusing" >&2
+	exit 1
+fi
+echo "mono-update: verified baked identity $RELTAG"
+
 OUT="releases/$RELTAG"
 BINDIR=bin/targets/layerscape/armv8_64b
 URLBASE="${MONO_PUBLISH_URL:-https://openwrt.mono.si}"
