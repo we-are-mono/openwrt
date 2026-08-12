@@ -106,12 +106,18 @@ BINDIR=bin/targets/layerscape/armv8_64b
 rm -rf "$BINDIR"
 
 cp configs/mono_gateway-dk.seed .config
-make defconfig
-# mono-update-check bakes the release tag into /etc/mono_release at its
-# build time; force it fresh or every image ships the stale identity of
-# the package's first build (and auto-mode devices re-flash forever).
-make package/mono/mono-update-check/clean package/mono/mono-update-check/compile
-make -j"$(nproc)" world
+
+# Build inside the pinned Nix FHS env (flake.nix) so the toolchain is identical
+# on every machine. Use `nix run` -- NOT `nix develop -c` / `nix-shell --run`,
+# which hang on the env's shellHook exec. git, publish and signing stay on the
+# host (their tools are not in the flake's package set).
+# mono-update-check is force-rebuilt (clean+compile) so /etc/mono_release carries
+# THIS release tag; otherwise every image ships the stale identity of the
+# package's first build and auto-mode devices re-flash forever.
+nix run . -- -c 'set -e
+	make defconfig
+	make package/mono/mono-update-check/clean package/mono/mono-update-check/compile
+	make -j"$(nproc)" world'
 
 # Verify the image actually baked THIS release's identity. The OTA client and
 # the on-device anti-rollback floor trust /etc/mono_release, so a stale value
