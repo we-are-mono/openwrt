@@ -46,7 +46,7 @@ DEFAULT_PACKAGES += kmod-usb3 kmod-usb-dwc3 kmod-usb-storage \
 # repository is fetched at a pinned revision and its kernel patch series is
 # applied, followed by the OpenWrt-integration patches in patches-ask/
 # (cherry-picks from the generic stack that OpenWrt userspace depends on).
-ASK_VERSION:=366dbbed6059e9cd150cc6f01204425eeb4ce659
+ASK_VERSION:=fe36f305a473d4121cf8613cc8c8c5a8496d8c48
 ASK_SOURCE:=ask-$(ASK_VERSION).tar.xz
 ASK_SUBDIR:=ask-$(ASK_VERSION)
 
@@ -64,7 +64,8 @@ ifneq ($(call qstrip,$(CONFIG_KERNEL_GIT_CLONE_URI)),)
 
   KERNEL_FILE_DEPENDS+=$(PLATFORM_DIR)/patches-ask $(PLATFORM_DIR)/files-ask
 
-  # 0*.patch only: 999-* is the legacy 5.4 reference monolith, never applied.
+  # Apply every patches/kernel/*.patch EXCEPT the legacy 5.4 monolith (999-*).
+  # A bare 0*.patch glob silently dropped 100+ (e.g. the phyless-port ethtool fix).
   # files-ask/ overlays board files (mono-gateway-dk.dts, vendored from the
   # meta-mono layer) onto the vendor tree; the dtb-y append is idempotent.
   define Kernel/Prepare
@@ -72,7 +73,8 @@ ifneq ($(call qstrip,$(CONFIG_KERNEL_GIT_CLONE_URI)),)
 	rm -rf $(KERNEL_BUILD_DIR)/$(ASK_SUBDIR) $(KERNEL_BUILD_DIR)/ask-kernel-patches
 	xzcat $(DL_DIR)/$(ASK_SOURCE) | $(TAR) -C $(KERNEL_BUILD_DIR) -xf -
 	mkdir -p $(KERNEL_BUILD_DIR)/ask-kernel-patches
-	$(CP) $(KERNEL_BUILD_DIR)/$(ASK_SUBDIR)/patches/kernel/0*.patch $(KERNEL_BUILD_DIR)/ask-kernel-patches/
+	$(CP) $(KERNEL_BUILD_DIR)/$(ASK_SUBDIR)/patches/kernel/*.patch $(KERNEL_BUILD_DIR)/ask-kernel-patches/
+	rm -f $(KERNEL_BUILD_DIR)/ask-kernel-patches/999-*.patch
 	$(call PatchDir,$(LINUX_DIR),$(KERNEL_BUILD_DIR)/ask-kernel-patches,ask/)
 	$(call PatchDir,$(LINUX_DIR),$(PLATFORM_DIR)/patches-ask,ask-openwrt/)
 	$(CP) $(PLATFORM_DIR)/files-ask/. $(LINUX_DIR)/

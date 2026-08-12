@@ -10,7 +10,7 @@ PKG_SOURCE_URL:=$(ASK_SOURCE_URL)
 PKG_SOURCE_VERSION:=$(ASK_VERSION)
 PKG_SOURCE:=$(ASK_SOURCE)
 PKG_SOURCE_SUBDIR:=ask-$(ASK_VERSION)
-PKG_MIRROR_HASH:=6496547bfb2e9af9161f20ad9fe9ed7e931c2814644988bbb1ac8b77ef26761f
+PKG_MIRROR_HASH:=0f14c3fade1cb7050d6d90c9951bea2957674d053f540a98964d1b70f06d5a03
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/cmm-ask-$(ASK_VERSION)
 PKG_BUILD_PARALLEL:=1
@@ -70,6 +70,8 @@ define Package/cmm/install
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/cmm/src/cmm $(1)/usr/bin/
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/config/fastforward $(1)/etc/config/fastforward
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) ./files/cmm-supervise $(1)/usr/sbin/cmm-supervise
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/cmm.init $(1)/etc/init.d/cmm
 endef
