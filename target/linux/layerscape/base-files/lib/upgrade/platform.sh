@@ -3,7 +3,13 @@
 # Copyright 2020 NXP
 #
 
-RAMFS_COPY_BIN=""
+# platform_do_upgrade_mono streams each tar member to its partition through a fifo
+# (mono_dd_member) so tar's exit status is checked, not just dd's - busybox ash has
+# no PIPESTATUS. mkfifo is the ONLY tool that path needs beyond stage2's base ramfs
+# list (which already ships busybox, fwtool, gzip, hexdump, tar and dd). Left out,
+# mkfifo is "not found" in the upgrade ramdisk and EVERY flash silently fails at the
+# boot-partition write, then reverts to the old image on reboot.
+RAMFS_COPY_BIN="mkfifo"
 RAMFS_COPY_DATA=""
 
 REQUIRE_IMAGE_METADATA=1
