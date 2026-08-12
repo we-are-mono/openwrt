@@ -463,7 +463,8 @@ define Device/mono_gateway-dk
 	block-mount kmod-usb-storage-uas kmod-fs-exfat kmod-fs-ntfs3 \
 	kmod-fs-vfat smartmontools usbutils pciutils i2c-tools \
 	tmux vim-full curl rsync jq less bind-dig openssh-sftp-server \
-	usign ca-bundle file ip-full resize2fs mono-update-check
+	usign ca-bundle file ip-full resize2fs mono-update-check \
+	cmmqos
   KERNEL_NAME := Image
   KERNEL := kernel-bin | gzip
   FILESYSTEMS := ext4
