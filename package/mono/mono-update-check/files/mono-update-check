@@ -112,14 +112,19 @@ WANT=$(echo "$JSON" | jsonfilter -e "@.devices['$BOARD'].sha256")
 [ -n "$TAG" ] || { say "malformed manifest (no tag)"; exit 1; }
 [ -n "$SYSUPGRADE_URL" ] || { say "no image for board $BOARD in latest.json"; exit 0; }
 
-# Anti-rollback: compare against the floor, not just the running tag.
-if ! is_newer "$TAG" "$FLOOR_TAG"; then
+# Anti-rollback: refuse anything STRICTLY older than the floor. Equal to the
+# floor is not a rollback - the floor is advanced right before flashing, so
+# after a crashed or refused flash the device still runs an older release
+# with floor == offered tag, and that retry must stay allowed: refusing it
+# would pin the device on the old release forever after one failed attempt.
+if is_newer "$FLOOR_TAG" "$TAG"; then
 	rm -f "$STATE"
-	if [ "$TAG" = "$CURRENT" ]; then
-		say "up to date ($CURRENT)"
-	else
-		say "server offers $TAG, not newer than floor $FLOOR_TAG - keeping $CURRENT"
-	fi
+	say "server offers $TAG, older than floor $FLOOR_TAG - keeping $CURRENT"
+	exit 0
+fi
+if ! is_newer "$TAG" "$CURRENT"; then
+	rm -f "$STATE"
+	say "up to date ($CURRENT)"
 	exit 0
 fi
 
@@ -148,7 +153,8 @@ GOT=$(sha256sum "$TMP/image.bin" | cut -d' ' -f1)
 [ "$GOT" = "$WANT" ] || fail "image hash mismatch against signed manifest - refusing"
 
 # Advance the floor BEFORE flashing so a crash mid-upgrade can never later
-# accept an image older than this one. Preserved across sysupgrade via keep.d.
+# accept an image older than this one; retrying THIS tag stays allowed (see
+# the anti-rollback gate). Preserved across sysupgrade via keep.d.
 printf 'floor=%s\n' "$TAG" > "$FLOORFILE"
 sync
 
