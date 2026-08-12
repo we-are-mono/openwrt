@@ -94,6 +94,17 @@ on_exit() {
 }
 trap on_exit EXIT
 
+BINDIR=bin/targets/layerscape/armv8_64b
+
+# Release builds must not inherit anything from previous runs: bin/targets is
+# never cleaned by make, and its profiles.json merge-preserves entries across
+# builds (version_code tracks the upstream base, not mono commits). Without
+# this purge, an artifact retired from IMAGES - e.g. sysupgrade-legacy.bin
+# after its sunset - would be resurrected into the NEW signed release from
+# the stale binary plus the preserved metadata entry, and the fleet cohort
+# that reads it would flash the PREVIOUS release under the new tag.
+rm -rf "$BINDIR"
+
 cp configs/mono_gateway-dk.seed .config
 make defconfig
 # mono-update-check bakes the release tag into /etc/mono_release at its
@@ -117,7 +128,6 @@ fi
 echo "mono-update: verified baked identity $RELTAG"
 
 OUT="releases/$RELTAG"
-BINDIR=bin/targets/layerscape/armv8_64b
 URLBASE="${MONO_PUBLISH_URL:-https://openwrt.mono.si}"
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -126,6 +136,15 @@ cp "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-ext4-emmc.img.gz \
    "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*.manifest "$OUT/"
 git format-patch --quiet -o "$OUT/patches" "$LATEST..$BRANCH"
 (cd "$OUT" && sha256sum *.img.gz *.bin > sha256sums)
+
+# The uncompressed legacy artifact is the only image pre-gzip devices can
+# install; a release without one strands them one failed flash per release.
+# Retiring it must be a deliberate act, not a recipe accident: require
+# MONO_ALLOW_NO_LEGACY=1 for the release that drops it.
+[ -n "$(ls "$OUT"/*-sysupgrade-legacy.bin 2>/dev/null)" ] || [ -n "${MONO_ALLOW_NO_LEGACY:-}" ] || {
+	echo "mono-update: no sysupgrade-legacy.bin staged and MONO_ALLOW_NO_LEGACY unset - refusing" >&2
+	exit 1
+}
 
 # NOTE: this script no longer signs. Signing happens on the key host via
 # scripts/mono-sign-release.sh, and publishing (scripts/mono-publish-release.sh)
