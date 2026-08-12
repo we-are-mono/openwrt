@@ -106,8 +106,18 @@ JSON=$(cat "$TMP/latest.json")
 FMT=$(echo "$JSON" | jsonfilter -e '@.format_version' 2>/dev/null)
 [ "$FMT" = "1" ] || { say "unsupported manifest format_version '$FMT' - refusing"; exit 1; }
 TAG=$(echo "$JSON" | jsonfilter -e '@.tag')
-SYSUPGRADE_URL=$(echo "$JSON" | jsonfilter -e "@.devices['$BOARD'].sysupgrade")
-WANT=$(echo "$JSON" | jsonfilter -e "@.devices['$BOARD'].sha256")
+# Prefer the gzip-compressed image (~10x smaller download); this firmware
+# decompresses and verifies it before flashing. The plain "sysupgrade" keys
+# stay pointed at an image the OLDEST deployed flasher can install, so
+# pre-gzip devices (which only know those keys) always have a workable
+# upgrade path. Take the _gz pair only when both keys are present - never
+# mix a URL from one pair with a hash from the other.
+SYSUPGRADE_URL=$(echo "$JSON" | jsonfilter -e "@.devices['$BOARD'].sysupgrade_gz")
+WANT=$(echo "$JSON" | jsonfilter -e "@.devices['$BOARD'].sha256_gz")
+if [ -z "$SYSUPGRADE_URL" ] || [ -z "$WANT" ]; then
+	SYSUPGRADE_URL=$(echo "$JSON" | jsonfilter -e "@.devices['$BOARD'].sysupgrade")
+	WANT=$(echo "$JSON" | jsonfilter -e "@.devices['$BOARD'].sha256")
+fi
 
 [ -n "$TAG" ] || { say "malformed manifest (no tag)"; exit 1; }
 [ -n "$SYSUPGRADE_URL" ] || { say "no image for board $BOARD in latest.json"; exit 0; }
