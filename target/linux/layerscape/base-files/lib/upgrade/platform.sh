@@ -124,6 +124,26 @@ platform_copy_config_sdboot() {
 		umount /mnt
 	fi
 }
+# Decompress a gzipped sysupgrade image ($1) to a plain tar ($2), verifying
+# the whole gzip stream (CRC32) before returning success. The fwtool metadata
+# trailer sits after the gzip stream, so strip it first with fwtool -T ($1 is
+# left untouched) - fed the raw image, gzip's exit status would be ambiguous
+# (trailing garbage vs corruption). A bad image fails here, before any dd.
+mono_decompress_image() {	# image.bin out.tar
+	local scratch="$2.gz"
+	fwtool -q -T -i /dev/null "$1" > "$scratch" || {
+		rm -f "$scratch"
+		echo "Could not strip the metadata trailer from the image"
+		return 1
+	}
+	gzip -dc "$scratch" > "$2" || {
+		rm -f "$scratch" "$2"
+		echo "Image failed the gzip integrity check"
+		return 1
+	}
+	rm -f "$scratch"
+}
+
 # Stream a sysupgrade tar member to a block device, failing if EITHER tar or dd
 # fails. A plain "tar | dd || ..." only observes dd's exit status, so a
 # truncated/erroring tar with a dd that exits 0 would silently write a short
@@ -141,6 +161,24 @@ mono_dd_member() {  # tar_file board_dir member device
 
 platform_do_upgrade_mono() {
 	local tar_file="$1"
+
+	# sysupgrade.bin ships gzipped (~44 MB vs ~470 MB) to cut OTA downloads.
+	# The shipped busybox tar has no compression autodetect, and streaming a
+	# decompress into the tar calls below could abort mid-write on a corrupt
+	# download - so verify and decompress the whole image to tmpfs first,
+	# then flash unchanged. Non-gzip images keep taking the direct path.
+	# PID-unique temp names so no operator-supplied image path in /tmp can
+	# collide with (and be truncated by) our own redirects.
+	if [ "$(dd if="$tar_file" bs=2 count=1 2>/dev/null | hexdump -v -n 2 -e '1/1 "%02x"')" = "1f8b" ]; then
+		local gz_tar="/tmp/mono-upgrade.$$.tar"
+		echo "Verifying and decompressing the sysupgrade image..."
+		mono_decompress_image "$tar_file" "$gz_tar" || {
+			echo "Refusing upgrade: image did not decompress cleanly - nothing was written"
+			return 1
+		}
+		tar_file="$gz_tar"
+	fi
+
 	local board_dir=$(tar tf $tar_file | grep -m 1 '^sysupgrade-.*/$')
 	board_dir=${board_dir%/}
 
