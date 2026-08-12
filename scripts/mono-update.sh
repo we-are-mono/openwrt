@@ -209,7 +209,7 @@ for name, p in prof.items():
 # format_version lets the client reject a manifest shape it doesn't understand.
 json.dump({"format_version": 1,
            "tag": reltag,
-           "date": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "date": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
            "devices": devices}, sys.stdout, indent=2)
 PY
 
