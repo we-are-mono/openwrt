@@ -69,7 +69,7 @@ if git remote get-url mono >/dev/null 2>&1; then
 		gh release create "$RELTAG" --repo "$REPO" \
 			--title "$RELTAG" \
 			--notes "Automated release: $RELTAG." \
-			"$OUT"/*-sysupgrade.bin "$OUT"/*-emmc.img.gz \
+			"$OUT"/*-sysupgrade*.bin "$OUT"/*-emmc.img.gz \
 			"$OUT/sha256sums" "$OUT/sha256sums.sig" \
 			releases/latest.json releases/latest.json.sig \
 			"$OUT/flash-mono-gateway.sh" \

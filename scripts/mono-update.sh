@@ -122,7 +122,7 @@ URLBASE="${MONO_PUBLISH_URL:-https://openwrt.mono.si}"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 cp "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-ext4-emmc.img.gz \
-   "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-ext4-sysupgrade.bin \
+   "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-ext4-sysupgrade*.bin \
    "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*.manifest "$OUT/"
 git format-patch --quiet -o "$OUT/patches" "$LATEST..$BRANCH"
 (cd "$OUT" && sha256sum *.img.gz *.bin > sha256sums)
@@ -150,21 +150,37 @@ chmod +x "$OUT/flash-mono-gateway.sh"
 # latest.json: board keys come from the image metadata (profiles.json),
 # not filename string-surgery, so a device that finds no image for its
 # board fails visibly rather than from a silent naming drift.
+# Two formats per board: "sysupgrade"/"sha256" must ALWAYS point at an
+# image the oldest deployed flasher can install (the uncompressed
+# -legacy artifact while one is built), because pre-gzip clients read
+# only those keys. Gzip-capable clients prefer "sysupgrade_gz"/
+# "sha256_gz". When the legacy artifact is retired, "sysupgrade" falls
+# back to the gzipped image and the _gz keys disappear - new clients
+# handle that, old ones are past support at that point by definition.
 python3 - "$RELTAG" "$URLBASE" "$OUT" "$BINDIR/profiles.json" \
 	> releases/latest.json <<'PY'
 import json, sys, os, hashlib, datetime
 reltag, urlbase, out, profiles = sys.argv[1:5]
 prof = json.load(open(profiles)).get("profiles", {})
 devices = {}
+def pick(p, suffix):
+    return next((im["name"] for im in p.get("images", [])
+                 if im.get("name", "").endswith(suffix)
+                 and os.path.exists(os.path.join(out, im["name"]))), None)
+def sha(img):
+    return hashlib.sha256(open(os.path.join(out, img), "rb").read()).hexdigest()
 for name, p in prof.items():
     boards = p.get("supported_devices") or []
-    img = next((im["name"] for im in p.get("images", [])
-                if im.get("name", "").endswith("sysupgrade.bin")
-                and os.path.exists(os.path.join(out, im["name"]))), None)
-    if not boards or not img:
+    img_gz = pick(p, "sysupgrade.bin")
+    img_legacy = pick(p, "sysupgrade-legacy.bin")
+    if not boards or not (img_gz or img_legacy):
         continue
-    h = hashlib.sha256(open(os.path.join(out, img), "rb").read()).hexdigest()
-    devices[boards[0]] = {"sysupgrade": f"{urlbase}/{reltag}/{img}", "sha256": h}
+    legacy = img_legacy or img_gz
+    entry = {"sysupgrade": f"{urlbase}/{reltag}/{legacy}", "sha256": sha(legacy)}
+    if img_gz and img_legacy:
+        entry["sysupgrade_gz"] = f"{urlbase}/{reltag}/{img_gz}"
+        entry["sha256_gz"] = sha(img_gz)
+    devices[boards[0]] = entry
 # format_version lets the client reject a manifest shape it doesn't understand.
 json.dump({"format_version": 1,
            "tag": reltag,
