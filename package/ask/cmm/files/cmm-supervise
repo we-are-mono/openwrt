@@ -1,0 +1,27 @@
+#!/bin/sh
+# procd runs this as the cmm instance command (see /etc/init.d/cmm). It
+# re-applies CEETM QoS once cmm's CLI is ready, then execs cmm in the
+# foreground. Because procd re-execs this wrapper on every respawn, the QoS
+# re-apply happens after a crash-restart too, not only on first boot -- cmm's
+# QoS state is in-memory and does not survive a restart.
+#
+# The re-applier is forked BEFORE the exec below, so it keeps running as a
+# child of the cmm process image and does its work in parallel with cmm start.
+
+if [ -x /etc/init.d/cmmqos ]; then
+	(
+		# cmm writes its pidfile before its CLI socket is listening, so a live
+		# process is not a readiness signal. Just retry the apply: it fails
+		# cleanly (non-zero) until cmm accepts 'cmm -c qm-config', then succeeds
+		# once. flock inside cmmqos serialises us against the boot-time apply.
+		i=0
+		while [ $i -lt 30 ]; do
+			sleep 1
+			/etc/init.d/cmmqos apply >/dev/null 2>&1 && exit 0
+			i=$((i + 1))
+		done
+		logger -t cmm "cmm-supervise: QoS not applied within 30s of cmm (re)start"
+	) &
+fi
+
+exec /usr/bin/cmm -F -f /etc/config/fastforward -n 131072

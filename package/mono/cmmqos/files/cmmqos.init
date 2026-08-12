@@ -3,12 +3,20 @@
 # directives and applies them live via 'cmm -c qm-config' (no cmm restart,
 # which would drop the fast path). Disabling + reloading applies an empty
 # config, which item 7's qm-config flushes-then-applies == QoS off.
+#
+# 'apply' is exposed as an action so the cmm-supervise wrapper can re-push
+# QoS after cmm (re)starts. apply() takes an flock because that wrapper and
+# the boot-time start_service can now run it concurrently.
 
 USE_PROCD=1
 START=55
 STOP=09
 
+EXTRA_COMMANDS="apply"
+EXTRA_HELP="	apply	Render and push the QoS config into the running cmm"
+
 CONF=/tmp/cmmqos.conf
+LOCK=/tmp/cmmqos.lock
 BOARD="mono,gateway-dk"
 
 qm() { printf 'set qm %s\n' "$*" >> "$CONF"; }
@@ -100,9 +108,11 @@ render_rate() {
 	esac
 }
 
-apply() {
+# Render the config and push it into the running cmm. Returns non-zero until
+# cmm's CLI actually accepts the config, so cmm-supervise's retry loop keeps
+# trying after a (re)start rather than giving up on the first not-ready reply.
+_apply_locked() {
 	[ "$(board_name)" = "$BOARD" ] || return 0
-	pgrep -x cmm >/dev/null 2>&1 || { logger -t cmmqos "cmm not running - deferring QoS apply"; return 0; }
 
 	config_load cmmqos
 	local enabled; config_get_bool enabled global enabled 0
@@ -118,16 +128,42 @@ apply() {
 		config_foreach render_sec_rate sec_rate
 		config_foreach render_rate rate
 	fi
-	# enabled=0 -> empty file -> qm-config flushes-then-applies == QoS off
+	# cmm's qm-config REFUSES a directive-less file — it will not wipe all QoS
+	# that way (verified on hw: empty => "is empty"; comment-only => "has no
+	# directives; refusing"). So "disabled" or "nothing rendered" means there is
+	# nothing to push: succeed and leave cmm's live QoS untouched. (To actually
+	# clear live QoS, restart cmm — the supervise wrapper re-applies on restart,
+	# so a disabled config simply comes back up with no QoS programmed.)
+	if ! grep -q '^set qm ' "$CONF"; then
+		logger -t cmmqos "QoS off / no directives - nothing to apply"
+		return 0
+	fi
+
+	# pidof, NOT 'pgrep -x cmm': busybox pgrep matches the full argv, so
+	# 'pgrep -x cmm' never matches a cmm started with args (-f -n ...).
+	pidof cmm >/dev/null 2>&1 || {
+		logger -t cmmqos "cmm not running - QoS apply deferred"
+		return 1
+	}
 
 	if cmm -c "qm-config $CONF" >/dev/null 2>&1; then
-		[ "$enabled" = "1" ] \
-			&& logger -t cmmqos "applied $(grep -c '^set qm' "$CONF") QoS directives" \
-			|| logger -t cmmqos "flushed QoS (disabled)"
-	else
-		logger -t cmmqos "ERROR: cmm rejected the QoS config (qm-config failed)"
-		return 1
+		logger -t cmmqos "applied $(grep -c '^set qm' "$CONF") QoS directives"
+		return 0
 	fi
+	logger -t cmmqos "cmm not ready or rejected QoS config - will retry"
+	return 1
+}
+
+apply() {
+	# Cheap board gate before taking the lock; nothing to do off-target.
+	[ "$(board_name)" = "$BOARD" ] || return 0
+	(
+		# busybox flock has no -w (timeout) — that is util-linux only. Block on
+		# -x until acquired; holders are short (render a temp file + one
+		# 'cmm -c'), so a plain blocking lock is safe and race-free here.
+		flock -x 9 || { logger -t cmmqos "apply: could not lock $LOCK"; exit 1; }
+		_apply_locked
+	) 9>"$LOCK"
 }
 
 start_service()  { apply; }
