@@ -436,10 +436,15 @@ diff --git a/src/conntrack/parse_mnl.c b/src/conntrack/parse_mnl.c
 index 3cbfc6a..33f7824 100644
 --- a/src/conntrack/parse_mnl.c
 +++ b/src/conntrack/parse_mnl.c
-@@ -856,6 +856,129 @@ static int nfct_parse_synproxy(const struct nlattr *attr,
+@@ -856,6 +856,134 @@ static int nfct_parse_synproxy(const struct nlattr *attr,
  	return 0;
  }
  
++/* NXP ASK: fast-path attrs are matched by NUMBER vs the kernel; a standard
++ * CTA_* inserted above shifts them and silently misfiles offload metadata. */
++_Static_assert(CTA_LAYERSCAPE_FP_ORIG == 27 && CTA_LAYERSCAPE_FP_REPLY == 28,
++	"CTA_LAYERSCAPE_FP_* ABI shifted - re-check enum ctattr_type");
++
 +/* NXP ASK: Comcerto fast path parsing */
 +static int
 +nfct_parse_comcerto_fp_attr_cb(const struct nlattr *attr, void *data)
