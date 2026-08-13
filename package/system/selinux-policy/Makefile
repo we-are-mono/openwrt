@@ -33,6 +33,13 @@ define Package/selinux-policy/description
 	OpenWrt and written in Common Intermediate Language.
 endef
 
+define Build/Prepare
+	$(call Build/Prepare/Default)
+	$(INSTALL_DIR) $(PKG_BUILD_DIR)/src/agent/sysagent $(PKG_BUILD_DIR)/src/dev/nodedev
+	$(CP) ./files/cil/cmmsysagent.cil ./files/cil/dpaappsysagent.cil ./files/cil/fancontrolsysagent.cil ./files/cil/monoupdatesysagent.cil ./files/cil/stockfixes.cil $(PKG_BUILD_DIR)/src/agent/sysagent/
+	$(CP) ./files/cil/cdxctrlnodedev.cil ./files/cil/fmnodedev.cil ./files/cil/vwdnodedev.cil $(PKG_BUILD_DIR)/src/dev/nodedev/
+endef
+
 define Build/Compile
 	$(call Build/Compile/Default,policy)
 endef

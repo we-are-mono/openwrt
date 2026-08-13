@@ -1,0 +1,49 @@
+;; fmnodedev.cil — private label for the Freescale FMan char devices (/dev/fm*)
+;; fsl_fman (DEV_FM_NAME="fm") creates, per FMan: /dev/fm0, /dev/fm0-pcd, and the port nodes
+;; /dev/fm0-port-{rx,tx}0..7 + /dev/fm0-port-oh0..6.
+;;   [include/uapi/linux/fmd/Peripherals/fm_ioctls.h:53-59; sdk_fman/.../lnxwrp_fm.c:1165-1168;
+;;    lnxwrp_fm_port.c:1163-1203; LS1043 integration dpaa_integration_ext.h:192-203 =>
+;;    FM_MAX_NUM_OF_MACS=8 (6x1G+2x10G) => rx/tx 0..7; FM_MAX_NUM_OF_OH_PORTS=6 => oh0..6]
+;; dpa_app opens all of these to program the FMan PCD for CDX hardware offload.
+;; Device-family node (mirrors dev/nodedev/usbnodedev.cil): enumerated devtmpfs name-transitions
+;; rather than a blanket tmp.fs chr_file grant to dpaapp — keeps every fm node in fm.nodedev, so the
+;; grant stays tight and no domain gets access to arbitrary unlabeled devtmpfs char nodes. LS1046A
+;; has a single FMan (fm0). Extra names for ports the board never probes are harmless no-ops.
+(block fm
+
+  (filecon "/dev/fm[0-9]+" char nodedev_context)
+  (filecon "/dev/fm[0-9]+-pcd" char nodedev_context)
+  (filecon "/dev/fm[0-9]+-port-(oh|rx|tx)[0-9]+" char nodedev_context)
+
+  (macro tmp_fs_type_transition_nodedev ((type ARG1))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-pcd"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-rx0"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-rx1"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-rx2"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-rx3"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-rx4"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-rx5"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-rx6"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-rx7"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-tx0"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-tx1"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-tx2"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-tx3"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-tx4"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-tx5"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-tx6"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-tx7"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-oh0"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-oh1"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-oh2"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-oh3"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-oh4"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-oh5"))
+    (call .tmp.fs_type_transition (ARG1 nodedev chr_file "fm0-port-oh6")))
+
+  (blockinherit .nodedev.template))
+
+(in nodedev.unconfined
+
+  (call .fm.tmp_fs_type_transition_nodedev (typeattr)))

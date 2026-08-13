@@ -1,2 +1,4 @@
-SELINUX=enforcing
+# Bring-up: permissive so the first labeled boot collects AVCs instead of
+# enforcing an incomplete policy. Flip to enforcing in P5 (after policy is done).
+SELINUX=permissive
 SELINUXTYPE=selinux-policy

@@ -1,0 +1,18 @@
+;; vwdnodedev.cil — private label for /dev/vwd0
+;; char dev (241,0) created at boot by a kernel module via devtmpfs: a virtual watchdog that cmm_t
+;; pings via ioctl. Granted ONLY to cmm_t (read/open/ioctl, NO write). Mirrors cdxctrlnodedev.cil so
+;; the node lands in its own vwd.nodedev type instead of falling to tmp.fs (which would leak every
+;; unlabeled tmpfs char device to cmm).
+(block vwd
+
+  (filecon "/dev/vwd0" char nodedev_context)
+
+  (macro tmp_fs_type_transition_nodedev ((type ARG1))
+    (call .tmp.fs_type_transition
+      (ARG1 nodedev chr_file "vwd0")))
+
+  (blockinherit .nodedev.template))
+
+(in nodedev.unconfined
+
+  (call .vwd.tmp_fs_type_transition_nodedev (typeattr)))

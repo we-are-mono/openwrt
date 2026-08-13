@@ -314,6 +314,20 @@ define Image/mkfs/ubifs
 		-o $@ -d $(call mkfs_target_dir,$(1))
 endef
 
+# Mono: when SELinux labels are requested, build the ext4 rootfs with setfiles +
+# mkfs.ext4 -d in one fakeroot session so the security.selinux xattrs are baked into
+# the image at build time (make_ext4fs does not copy source xattrs). Ported from the
+# cvd fork (gen_ext4_resizable.sh); removes the first-boot relabel+reboot. See SELINUX.md.
+ifeq ($(CONFIG_TARGET_ROOTFS_SECURITY_LABELS),y)
+define Image/mkfs/ext4
+	$(TOPDIR)/target/linux/layerscape/image/gen_ext4_resizable.sh \
+		$@ $(ROOTFS_PARTSIZE) $(CONFIG_TARGET_EXT4_BLOCKSIZE) \
+		$(call mkfs_target_dir,$(1)) \
+		$(if $(CONFIG_TARGET_EXT4_RESERVED_PCT),$(CONFIG_TARGET_EXT4_RESERVED_PCT),0) \
+		$(if $(CONFIG_TARGET_EXT4_JOURNAL),journal,nojournal) \
+		$(STAGING_DIR_HOST)/bin/setfiles
+endef
+else
 define Image/mkfs/ext4
 	$(STAGING_DIR_HOST)/bin/make_ext4fs -L rootfs \
 		-l $(ROOTFS_PARTSIZE) -b $(CONFIG_TARGET_EXT4_BLOCKSIZE) \
@@ -322,6 +336,7 @@ define Image/mkfs/ext4
 		$(if $(SOURCE_DATE_EPOCH),-T $(SOURCE_DATE_EPOCH)) \
 		$@ $(call mkfs_target_dir,$(1))/
 endef
+endif
 
 # Don't use the mkfs.erofs builtin $SOURCE_DATE_EPOCH behavior
 define Image/mkfs/erofs

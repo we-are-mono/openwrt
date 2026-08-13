@@ -1,0 +1,58 @@
+;; fancontrolsysagent.cil — fancontrol_t
+;; procd execs the fancontrol bash script (physically /usr/sbin/fancontrol; the filecon uses the
+;; /usr/bin canonical path — file_contexts.subs_dist maps /usr/sbin -> /usr/bin). Sysfs mirrors ledsysagent.
+(block fancontrol
+
+  (blockinherit .sys.agent.template)
+
+  ;; /sys/class/hwmon discovery, read fan inputs, WRITE pwmN (ledsysagent pattern)
+  (call .class.list_sysfile_dirs (subj))
+  (call .class.read_sysfile_lnk_files (subj))
+  (call .devices.list_sysfile_dirs (subj))
+  (call .devices.read_sysfile_files (subj))
+  (call .devices.read_sysfile_lnk_files (subj))
+  (call .devices.readwrite_sysfile_files (subj))        ;; pwmN write
+
+  (call .shell.client.type (subj))                      ;; busybox/coreutils helpers
+
+  ;; fancontrol is a #!/bin/bash script; /bin/bash is the generic exec.file type (not shell.exec), so
+  ;; the domain needs execute+map+read on generic executables to run the interpreter (ttydsysagent
+  ;; pattern). map is required on modern kernels for the mmap of the executable image.
+  (call .file.exec.mapexecute_all_files (subj))         ;; execute + map
+  (call .file.exec.read_all_files (subj))               ;; read
+
+  ;; pidfile /var/run/fancontrol.pid (=> /tmp/run/fancontrol.pid) — private runtmp type; the
+  ;; name-transition grants subj add_name+write on the /tmp/run (runtmp.file) dir, and
+  ;; deletename_file_dirs adds remove_name so the init stop() `rm` can delete the pidfile.
+  (call runtmp.manage_file_files (subj))
+  (call runtmp.runtmp_file_type_transition_file (subj))
+  (call .runtmp.deletename_file_dirs (subj))
+
+  (call .log.server.unix_dgram_send (subj))
+
+  (block runtmp
+
+    (filecon "/tmp/run/fancontrol" file file_context)
+    (filecon "/tmp/run/fancontrol\.pid" file file_context)
+
+    (macro runtmp_file_type_transition_file ((type ARG1))
+      (call .runtmp.file_type_transition
+        (ARG1 file file "fancontrol"))
+      (call .runtmp.file_type_transition
+        (ARG1 file file "fancontrol.pid")))
+
+    (blockinherit .file.macro_template_files)
+    (blockinherit .file.tmp.run.base_template)))
+
+(in file.unconfined
+
+  (call .fancontrol.exec.exec_file_type_transition_file (typeattr))
+  (call .fancontrol.runtmp.runtmp_file_type_transition_file (typeattr)))
+
+(in after fancontrol.exec
+
+  (filecon "/usr/bin/fancontrol" file file_context)     ;; canonical path (binary is /usr/sbin/fancontrol)
+
+  (macro exec_file_type_transition_file ((type ARG1))
+    (call .exec.file_type_transition
+      (ARG1 file file "fancontrol"))))

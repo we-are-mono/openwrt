@@ -52,3 +52,40 @@ CONFIG_PACKAGE_u-boot-fsl_ls1046a-rdb-sdboot=y
 # CONFIG_TARGET_IMAGES_GZIP is not set
 CONFIG_TARGET_ROOTFS_PARTSIZE=256
 # CONFIG_TARGET_ROOTFS_SQUASHFS is not set
+# SELinux — permissive skeleton. CONFIG_SELINUX=y cascades the
+# kernel LSM bits, swaps in procd-selinux/busybox-selinux, and pulls the dssp
+# base policy. The rootfs is held permissive via `enforcing=0` on the kernel
+# cmdline (Build/mono-bootfs) until per-daemon policy is authored; first boot
+# labels the ext4 rootfs via restorecon (uci-defaults 15-mono-selinux-relabel).
+CONFIG_SELINUX=y
+CONFIG_SELINUXTYPE_dssp=y
+# On-device relabel tooling: restorecon/setfiles (first-boot ext4 relabel) + sestatus
+# (verification). policycoreutils is a MENU package, so DEVICE_PACKAGES alone leaves it
+# unbuilt — it needs explicit selection here. Pulls libaudit.
+CONFIG_PACKAGE_policycoreutils=y
+CONFIG_PACKAGE_policycoreutils-setfiles=y
+CONFIG_PACKAGE_policycoreutils-sestatus=y
+# auditd drains SELinux AVC records to /var/log/audit/audit.log. Once it claims
+# the audit netlink the kernel stops printk'ing denials to the console, keeping
+# the serial console clean for kernel diag prints; ausearch (audit-utils) reads
+# the log. No audisp-syslog mirror, so denials do NOT also go to logread.
+# Pulls libauparse + audit-utils + libev.
+CONFIG_PACKAGE_auditd=y
+
+# AdGuard Home — network-wide DNS ad/tracker blocker with its own web UI (:3000).
+# From the pinned packages feed (not a bulk FEED_packages enable — just this pkg).
+# Go SOURCE build: pulls the golang/host toolchain (heavy first build) + ca-bundle;
+# ships /etc/config/adguardhome + adguardhome.yaml conffiles + init + a procd
+# capabilities profile. Will need its own SELinux domain later (author from soak).
+CONFIG_PACKAGE_adguardhome=y
+
+# Drop LuCI's Software (apk) WEB frontend only. It made the cgi-io helper exec apk,
+# dragging a large SELinux AVC surface (apk data/conf/cache reads + exec) into the
+# web path, and web-driven package management isn't our delivery model (sysupgrade
+# is). This removes ONLY the LuCI page: the apk binary stays (base system) and must
+# remain fully usable from the shell — nothing here disables CLI apk. luci-ssl was
+# swapped for luci-light + libustream-mbedtls + px5g-mbedtls in the device
+# DEVICE_PACKAGES (that collection was the only thing pulling package-manager); this
+# line stops the stale =y from re-installing it. (Keeping shell apk AVC-clean under
+# enforcing is future policy work on the login/admin domain, not precluded here.)
+# CONFIG_PACKAGE_luci-app-package-manager is not set

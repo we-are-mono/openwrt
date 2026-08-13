@@ -1,0 +1,106 @@
+;; cmmsysagent.cil — cmm_t (PRIMARY)
+;; procd -> /usr/sbin/cmm-supervise (shell, stays sys.subj) -> exec /usr/bin/cmm (THIS transition).
+;; `cmm -c` CLI is the SAME exec => re-enters cmm_t, so SysV-msgq IPC + loopback control self-scope.
+(block cmm
+
+  (blockinherit .sys.agent.template)
+
+  ;; net_admin: rtnl + cdx_ctrl ioctl + NETLINK_FF/L2FLOW; net_raw: AF_PACKET/pcap
+  (allow subj self (capability (net_admin net_raw)))
+  ;; sys_module: kernel-module autoload on the offload path (pairs with .sys.modulerequest_system
+  ;; below); ipc_owner: own the SysV msgq that `cmm -c` uses to reach the daemon.
+  (allow subj self (capability (sys_module ipc_owner)))
+  (call .sys.modulerequest_system (subj))              ;; trigger kernel-module autoload (see sys_module)
+  (allow subj self create_netlink_route_socket)
+  (allow subj self (netlink_route_socket (nlmsg_read nlmsg_write)))
+  (allow subj self create_netlink_netfilter_socket)   ;; libnetfilter_conntrack (NETLINK_NETFILTER)
+  (allow subj self create_netlink_socket)              ;; NETLINK_FF/L2FLOW => generic class; cmm_t ONLY
+  (allow subj self create_packet_socket)               ;; AF_PACKET + libpcap
+  (allow subj self create_rawip_socket)                ;; SOCK_RAW ICMPv6/IP
+  (allow subj self create_tcp_stream_socket)           ;; loopback CLI listener
+  (allow subj self create_udp_socket)                  ;; datagram socket (cmm control/probe)
+  (allow subj self create_msgq)                        ;; `cmm -c` CLI <-> daemon
+  (allow subj self (msg (send receive)))
+  (allow subj self (process (getpgid)))                ;; query own process-group id
+
+  (call .net.nodebind_netnode_tcp_sockets (subj))
+  (call .net.egress_netifs (subj))
+  (call .net.sendto_nodes (subj))
+  (call .net.port.unreserved.namebind_all_tcp_sockets (subj))  ;; loopback CLI listener binds an ephemeral tcp port
+
+  ;; tune /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal (net.sysctlfile) for the offload
+  (call .sysctl.search_procfile_dirs (subj))            ;; traverse /proc/sys
+  (call .net.search_sysctlfile_dirs (subj))             ;; traverse /proc/sys/net[/netfilter]
+  (call .net.write_sysctlfile_files (subj))             ;; write the conntrack sysctl (write_file incl. open)
+
+  ;; flush the IPv4 route cache (/proc/sys/net/ipv4/route/flush) on network restart. ipv4.sysctlfile
+  ;; is a DISTINCT type from the net.sysctlfile written above.
+  (call .ipv4.search_sysctlfile_dirs (subj))           ;; traverse /proc/sys/net/ipv4[/route]
+  (call .ipv4.write_sysctlfile_files (subj))            ;; write route/flush (write_file incl. open)
+
+  ;; read /proc/net/* (route/conntrack tables). /proc/net is a symlink => lnk_file read too.
+  (call .net.read_procfile_files (subj))                ;; (file (open read))
+  (call .net.read_procfile_lnk_files (subj))            ;; (lnk_file (read)) — the /proc/net symlink
+
+  (call .cdxctrl.readwrite_nodedev_chr_files (subj))    ;; /dev/cdx_ctrl
+  (call .vwd.read_nodedev_chr_files (subj))             ;; /dev/vwd0 virtual watchdog — read/open/ioctl, NO write
+  (call .console.open_serialtermdev_chr_files (subj))   ;; open /dev/console (diagnostics)
+
+  (call .log.server.unix_dgram_send (subj))             ;; syslog
+
+  ;; /etc/config/fastforward is a UCI config file labeled uci.conf.file (by ucisysagent) so `uci`
+  ;; (uci.subj) manages it; cmm only READS it. That is a DISTINCT type from the generic conf.file,
+  ;; so it needs the uci-specific read/search interface (not .conf.read_file_files).
+  (call .file.conf.uci.search_all_dirs (subj))         ;; (dir (search)) — traverse /etc/config
+  (call .file.conf.uci.read_all_files (subj))          ;; (file (open read)) — /etc/config/*
+
+  ;; other generic /etc config files cmm reads (non-UCI).
+  (call .conf.read_file_files (subj))
+
+  ;; SysV-IPC ftok key file /tmp/cmm.<random> -> private cmm.tmp type. The subj-sourced "*" transition
+  ;; (dnsmasq idiom) labels whatever cmm creates in /tmp and grants add_name+search on /tmp (tmp.fs);
+  ;; deletename_fs_dirs adds remove_name for cleanup. Closes the round-1 .tmp.search_fs_dirs TODO.
+  (call tmp.manage_file_files (subj))
+  (call tmp.tmp_fs_type_transition_file (subj file "*"))
+  (call .tmp.deletename_fs_dirs (subj))
+
+  ;; pidfile /var/run/cmm.pid (=> /tmp/run/cmm.pid) -> private runtmp type; name-transition grants
+  ;; add_name+write on /tmp/run, deletename_file_dirs adds remove_name for shutdown cleanup.
+  (call runtmp.manage_file_files (subj))
+  (call runtmp.runtmp_file_type_transition_file (subj))
+  (call .runtmp.deletename_file_dirs (subj))
+
+  (block tmp
+
+    (filecon "/tmp/cmm\..*" file file_context)
+
+    (macro tmp_fs_type_transition_file ((type ARG1)(class ARG2)(name ARG3))
+      (call .tmp.fs_type_transition
+        (ARG1 file ARG2 ARG3)))
+
+    (blockinherit .file.macro_template_files)
+    (blockinherit .file.tmp.base_template))
+
+  (block runtmp
+
+    (filecon "/tmp/run/cmm\.pid" file file_context)
+
+    (macro runtmp_file_type_transition_file ((type ARG1))
+      (call .runtmp.file_type_transition
+        (ARG1 file file "cmm.pid")))
+
+    (blockinherit .file.macro_template_files)
+    (blockinherit .file.tmp.run.base_template)))
+
+(in file.unconfined
+
+  (call .cmm.runtmp.runtmp_file_type_transition_file (typeattr))
+  (call .cmm.exec.exec_file_type_transition_file (typeattr)))
+
+(in after cmm.exec
+
+  (filecon "/usr/bin/cmm" file file_context)
+
+  (macro exec_file_type_transition_file ((type ARG1))
+    (call .exec.file_type_transition
+      (ARG1 file file "cmm"))))

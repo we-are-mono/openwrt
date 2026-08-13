@@ -1,0 +1,463 @@
+;; SPDX-FileCopyrightText: © 2026 Mono OpenWrt <mono-openwrt@local>
+;; SPDX-License-Identifier: Unlicense
+;;
+;; stockfixes.cil — close permissive-mode AVC denials against STOCK dssp
+;; daemons on the Mono Gateway. Every rule here EXTENDS an existing stock
+;; domain via (in <domain> ...); no dssp base .cil file is patched. Harvest:
+;; /var/log/audit/audit.log (permissive) on hardware.
+;;
+;; Transition-first rule: when a domain execs a tool that already has its own
+;; dssp domain, add the tool's subj_type_transition so the tool runs confined
+;; in its own domain instead of raw execute/execute_no_trans in the caller.
+;; The agent-template one-arg subj_type_transition macro grants the caller
+;; read_file (getattr ioctl lock open read) + mapexecute_file (execute map) on
+;; the target's exec.file plus the process typetransition — so it also closes
+;; the pre-exec getattr/stat on that exec file, and does NOT need
+;; execute_no_trans (the transition path is taken instead).
+
+;; ===========================================================================
+;; odhcp.server (odhcpd) — private-label the atomic-write temp paths
+;; ===========================================================================
+;; Denials: file tmp.fs {create open write rename lock ioctl unlink};
+;;          dir  tmp.fs {create}.
+;; odhcpd stages the lease file through /tmp/.odhcpd.tmp (write-then-rename)
+;; and uses a /tmp/odhcpd-piodir working dir. With no name-transition these
+;; land as the shared tmp.fs type, which odhcpd may not manage. Give them the
+;; private odhcp.server.tmp.file label — already covered by the domain's
+;; tmp.manage_file_{files,dirs} — via the same filecons + fs_type_transitions
+;; the base file already uses for .odhcpd.leases / odhcpd-piofolder. Adapted
+;; from cvd's bring-up patch (010), re-expressed as (in ...); base untouched.
+
+(in odhcp.server
+    (call tmp.tmp_fs_type_transition_file (subj dir "odhcpd-piodir"))
+    (call tmp.tmp_fs_type_transition_file (subj file ".odhcpd.tmp")))
+
+(in odhcp.server.tmp
+    (filecon "/tmp/\.odhcpd\.tmp" file file_context)
+    (filecon "/tmp/\.odhcpd\.tmp\..*" file file_context)
+    (filecon "/tmp/odhcpd-piodir" dir file_context)
+    (filecon "/tmp/odhcpd-piodir/.*" any file_context))
+
+(in file.unconfined
+    (call .odhcp.server.tmp.tmp_fs_type_transition_file
+	  (typeattr dir "odhcpd-piodir"))
+    (call .odhcp.server.tmp.tmp_fs_type_transition_file
+	  (typeattr file ".odhcpd.tmp")))
+
+;; ===========================================================================
+;; ucode — LuCI backend runs as ucode
+;; ===========================================================================
+;; Denials: file luci.data.file {read open}; dir luci.data.file {search read
+;;          open}; file exec.file {read open}; file conftmp.file {write ioctl}.
+;; ucode hosts the LuCI ucode backend: it reads /usr/share/luci (luci.data),
+;; reads a generic executable's bytes, and stages config into /tmp/etc
+;; (conftmp) on save-and-apply.
+
+(in ucode
+    (call .luci.data.list_file_dirs (subj))
+    (call .luci.data.read_file_files (subj))
+
+    ;; read (not execute) the bytes of a generic-labelled executable
+    (call .exec.read_file_files (subj))
+
+    ;; write staged config under /tmp/etc
+    (call .conftmp.write_file_files (subj)))
+
+;; ===========================================================================
+;; hotplug.call — run routing/netfilter tools confined; native probes/state
+;; ===========================================================================
+;; hotplug handler scripts exec ip/tc/nft. Confine them in their own domains.
+;; This ALSO absorbs the harvested self netlink_route_socket, net_admin
+;; capability, /proc/net reads and /dev/urandom reads: those were ip/tc/nft
+;; running in hotplug.call.subj (no transition), and iproute2.ip / iproute2.tc
+;; / nft already carry exactly those perms — so they are deliberately NOT
+;; re-granted here (see the "prefer transitions" rule and the handoff report).
+
+(in hotplug.call
+    (call .iproute2.ip.subj_type_transition (subj))
+    (call .iproute2.tc.subj_type_transition (subj))
+    ;; read_file from the transition covers the harvested nft.exec.file getattr
+    (call .nft.subj_type_transition (subj))
+
+    ;; getattr-only executability probes ([ -x ... ]) on tools NOT exec'd here
+    ;; (no execute was harvested). read_file is the narrowest catalogued
+    ;; interface — there is no getattr-only file interface in dssp.
+    (call .kmod.loader.exec.read_file_files (subj))
+    (call .exec.read_file_files (subj))
+
+    ;; genuinely hotplug-native accesses (not attributable to a confined tool):
+    (allow subj self (process (getsched)))
+    (call .cpuinfo.read_procfile_files (subj))   ;; scripts count CPUs
+    (call .sys.modulerequest_system (subj))      ;; device-module autoload
+    (call .conf.read_file_files (subj))          ;; generic /etc config reads
+    (call .conf.list_file_dirs (subj))           ;; +read/open conf.file dirs (surfaced by openvpn-up hotplug)
+    (call .runtmp.manage_file_dirs (subj))       ;; manage generic /tmp/run
+    (call .runtmp.manage_file_files (subj)))
+
+;; ===========================================================================
+;; rpc.server (rpcd) — shell plugins: package DB, shell libs, jshn, generic exec
+;; ===========================================================================
+;; Denials: {read open search} on apk.data + libubox.data; {read open getattr
+;; search} on functions.data; jshn.exec {read open map execute_no_trans};
+;; exec.file (file+dir) {read open getattr execute execute_no_trans}.
+
+(in rpc.server
+    ;; the apk package status DB, libubox + shell function libraries
+    (call .apk.data.list_file_dirs (subj))
+    (call .apk.data.read_file_files (subj))
+    (call .libubox.data.list_file_dirs (subj))
+    (call .libubox.data.read_file_files (subj))
+    ;; functions.client = functions.data list+read (covers search + getattr)
+    (call .functions.client.type (subj))
+
+    ;; plugins exec the jshn helper — confine it in its own domain
+    (call .jshn.subj_type_transition (subj))
+
+    ;; plugins exec generic shell scripts (/usr/libexec/rpcd/*) in-domain:
+    ;; list the dir, execute_file grants the execute + execute_no_trans set
+    (call .exec.list_file_dirs (subj))
+    (call .exec.execute_file_files (subj)))
+
+;; ===========================================================================
+;; jshn — generic /tmp/run I/O and /etc config reads
+;; ===========================================================================
+;; Denials: file runtmp.file {write read open ioctl getattr};
+;;          file conf.file {read open getattr}.
+
+(in jshn
+    (call .runtmp.readwrite_file_files (subj))
+    (call .conf.read_file_files (subj)))
+
+;; ===========================================================================
+;; ipcalc — silence the inherited netif.data fd
+;; ===========================================================================
+;; Denial: file netif.data.file {read} — read with no open => an already-open
+;; fd leaked from netifd (the parent), not a file ipcalc opens itself. Mirror
+;; how ucode / jshn / nft / odhcpd handle the same leak: dontaudit, not grant.
+
+(in ipcalc
+    (call .netif.data.dontaudit_readinherited_file_files (subj)))
+
+;; ===========================================================================
+;; iproute2.tc — silence the inherited netifd fd/data leak
+;; ===========================================================================
+;; Denials appeared only AFTER tc was confined via the hotplug ip/tc transition:
+;; file netif.data.file {read} + fd netif.server.subj {use} — both leaked from
+;; netifd (tc's parent), not opened by tc. dontaudit, mirroring ipcalc.
+
+(in iproute2.tc
+    (call .netif.data.dontaudit_readinherited_file_files (subj))
+    (call .netif.server.dontaudit_use_subj_fds (subj)))
+
+;; ===========================================================================
+;; hotplug.call — /dev/urandom read (hotplug-native, e.g. update-check script)
+;; ===========================================================================
+;; Denial: chr_file random.nodedev {read open} by a script in hotplug.call.subj
+;; (comm=update-availabl). Persisted after the ip/tc/nft transitions, so it is
+;; genuinely hotplug-native (not an in-domain tool) — grant it.
+
+(in hotplug.call
+    (call .random.read_nodedev_chr_files (subj)))
+
+;; ===========================================================================
+;; dnsmasq.server — bind DNS on an unreserved port (:5353)
+;; ===========================================================================
+;; Denials: udp_socket + tcp_socket name_bind on unreserved.port. dnsmasq was
+;; moved off :53 to :5353 (AdGuard Home owns :53 as the filtering resolver), so
+;; it now binds an unreserved port; the base policy only granted the reserved
+;; dns.port. Grant the unreserved bind on both socket types.
+
+(in dnsmasq.server
+    (call .net.port.unreserved.namebind_all_tcp_sockets (subj))
+    (call .net.port.unreserved.namebind_all_udp_sockets (subj)))
+
+;; ===========================================================================
+;; luci — service/status + process/overview pages
+;; ===========================================================================
+;; Two access profiles, both driven by browsing the LuCI admin UI:
+;;
+;; (1) Service/Startup pages stat init scripts and read their configs:
+;;     getattr on initscript.file (+ dir search) and conf.file. No getattr-only
+;;     file interface exists in dssp (getattr ⊂ read_file's getattr/ioctl/lock/
+;;     open/read set), so read_file is the narrowest catalogued grant; these are
+;;     the same interfaces initscriptsysagent/hotplug/rpcd/jshn already use.
+;;
+;; (2) Status→Overview / realtime / System→Processes enumerate EVERY running
+;;     process: read each daemon's /proc/<pid> (dir+file labelled with that
+;;     daemon's own <domain>.subj type), signal-0 liveness probes, and list
+;;     /proc itself. htop (the stock process viewer) reads all processes via
+;;     exactly this interface set — mirror it. ps_all_states is the single
+;;     interface that covers the ~55 per-daemon dir/file /proc reads. LuCI also
+;;     execs a generic helper (exec.file) in-domain.
+
+(in luci
+    ;; (1) service/status pages
+    (call .initscript.read_file_files (subj))
+    (call .initscript.search_file_dirs (subj))
+    (call .conf.read_file_files (subj))
+
+    ;; (2) process/overview pages — mirror htop's read-all-processes set
+    (call .subj.ps_all_states (subj))          ;; read all domains' /proc state
+    (call .subj.signull_all_processes (subj))  ;; signal-0 liveness probes
+    (call .proc.list_fs_dirs (subj))           ;; read/open /proc itself
+    (call .exec.execute_file_files (subj)))     ;; run a generic helper in-domain
+
+;; ===========================================================================
+;; rpc.server (rpcd) — serving LuCI overview: confine helpers, read system state
+;; ===========================================================================
+;; Browsing LuCI's overview/status drives rpcd (rpc-sys / luci-rpc plugins) to
+;; exec uci/ubus/nft/wget/jsonfilter/wg and gather system state. Confine the six
+;; helpers in their own domains (transition-first): the transitions absorb each
+;; tool's <tool>.exec.file read/map/execute_no_trans — so those are deliberately
+;; NOT re-granted here. The rest are rpcd's own accesses: the netfilter netlink
+;; socket (rpcd queries nftables via libnftnl directly, NOT through the nft
+;; binary, so the nft transition does not cover it — hardware-confirmed), board/
+;; firmware/preinit/netif/modules state, /proc/uptime, generic data + conf, the
+;; root dir, a lib-labelled helper exec, and log/run scratch dirs.
+
+(in rpc.server
+    (call .uci.subj_type_transition (subj))
+    (call .ubus.subj_type_transition (subj))
+    (call .nft.subj_type_transition (subj))
+    (call .wget.subj_type_transition (subj))
+    (call .jsonfilter.subj_type_transition (subj))
+    (call .wireguard.wg.subj_type_transition (subj))  ;; luci wireguard status
+
+    ;; rpcd talks to nftables over its own netfilter netlink socket (libnftnl)
+    (allow subj self create_netlink_netfilter_socket)
+
+    ;; rpcd-native system-state reads (not attributable to a confined helper)
+    (call .firmware.data.list_file_dirs (subj))
+    (call .preinit.data.list_file_dirs (subj))
+    (call .preinit.data.read_file_files (subj))
+    (call .netif.data.list_file_dirs (subj))
+    (call .netif.data.read_file_files (subj))
+    (call .modules.list_file_dirs (subj))
+    (call .modules.read_file_files (subj))
+    (call .uptime.read_procfile_files (subj))
+    (call .root.list_file_dirs (subj))
+    (call .data.read_file_files (subj))
+    (call .conf.read_file_files (subj))
+    (call .lib.execute_file_files (subj))
+
+    ;; log/run scratch dirs (rpcd stages output under /tmp/log + /tmp/run)
+    (call .logtmp.manage_file_dirs (subj))
+    (call .runtmp.manage_file_dirs (subj))
+    (call .runtmp.manage_file_files (subj)))
+
+;; ===========================================================================
+;; wget / nft — silence inherited rpcd fd leaks (surfaced by the transitions)
+;; ===========================================================================
+;; Once rpcd confines wget/nft in their own domains (above), each tool inherits
+;; rpcd's already-open fds on rpc.data / ucode.data files it never uses itself —
+;; read-with-no-open leaks from the parent. dontaudit, mirroring how jsonfilter /
+;; wireguard-tools already handle the same rpc.data/ucode.data leaks in dssp.
+
+(in wget
+    (call .rpc.data.dontaudit_readinherited_file_files (subj))
+    (call .ucode.data.dontaudit_readinherited_file_files (subj)))
+
+(in nft
+    (call .rpc.data.dontaudit_readinherited_file_files (subj)))
+
+;; ===========================================================================
+;; htop — interactive process viewer: read generic /etc config + /sys class/bus
+;; ===========================================================================
+;; htop (shipped admin tool) reads a generic /etc config (conf.file, beyond its
+;; own htoprc), enumerates /sys/class and /sys/bus (device/sensor discovery), and
+;; statfs's sysfs. Its stock domain grants /sys/block + /sys/devices but not
+;; class/bus, generic conf, or the sysfs filesystem getattr — add those.
+
+(in htop
+    (call .conf.read_file_files (subj))
+    (call .conf.list_file_dirs (subj))
+    (call .class.list_sysfile_dirs (subj))
+    (call .class.read_sysfile_lnk_files (subj))
+    (call .bus.list_sysfile_dirs (subj))
+    (call .bus.read_sysfile_lnk_files (subj))
+    (call .sys.getattr_fs (subj)))
+
+;; ===========================================================================
+;; cgiio (cgi-io) — LuCI firewall/realtime pages: query nftables via netlink
+;; ===========================================================================
+;; Browsing LuCI's firewall/realtime-status pages drives the cgi-io helper to run
+;; a generic helper that reads nftables/conntrack state over a netfilter netlink
+;; socket (needs net_admin). This is a distinct cgi-io use from the (now removed)
+;; apk Software page; grant the netlink socket, the capability, and the in-domain
+;; helper exec.
+
+(in cgiio
+    (allow subj self create_netlink_netfilter_socket)
+    (allow subj self (capability (net_admin)))
+    (call .exec.execute_file_files (subj))
+    ;; connections/realtime page also reads /proc/net (conntrack, dev, …)
+    (call .net.read_procfile_files (subj))
+    (call .net.read_procfile_lnk_files (subj))
+
+    ;; cgi-io's exec-streaming backend launches the LuCI status collectors —
+    ;; confine each in its own domain (transition-first). The transitions absorb
+    ;; each tool's own exec/data/runtmp reads (incl. the init scripts' functions/
+    ;; uci/rc.common sourcing), so those are deliberately NOT granted to cgi-io.
+    (call .firewall.subj_type_transition (subj))
+    (call .ucode.subj_type_transition (subj))
+    (call .sys.initscript_subj_type_transition (subj))
+
+    ;; genuinely cgi-io's own: routing netlink, LuCI + libubox data it reads
+    ;; directly, /proc/version, /sys class/bus/devices, generic conf, /tmp/run
+    (allow subj self create_netlink_route_socket)
+    (call .luci.data.list_file_dirs (subj))
+    (call .luci.data.read_file_files (subj))
+    (call .libubox.data.list_file_dirs (subj))
+    (call .libubox.data.read_file_files (subj))
+    (call .conf.read_file_files (subj))
+    (call .conf.list_file_dirs (subj))
+    (call .version.read_procfile_files (subj))
+    (call .devices.list_sysfile_dirs (subj))
+    (call .devices.read_sysfile_files (subj))
+    (call .module.list_sysfile_dirs (subj))
+    (call .class.list_sysfile_dirs (subj))
+    (call .class.read_sysfile_lnk_files (subj))
+    (call .runtmp.manage_file_files (subj))
+    (call .runtmp.manage_file_dirs (subj)))
+
+;; nlbwmon (bandwidth monitor) is a daemon with no subj_type_transition, so the
+;; LuCI bandwidth page's cgi-io runs the nlbwmon query client IN-domain: exec the
+;; binary, read its database, and connect to its control socket.
+(in cgiio
+    (call .nlbwmon.exec.execute_file_files (subj))
+    (call .nlbwmon.data.list_file_dirs (subj))
+    (call .nlbwmon.data.read_file_files (subj))
+    (call .nlbwmon.unix_stream_connect (subj)))
+
+;; wg (confined via the rpcd/cgiio transitions) inherits an rpcd rpc.data fd it
+;; never uses itself — dontaudit, mirroring the wget/nft leaks below.
+(in wireguard.wg
+    (call .rpc.data.dontaudit_readinherited_file_files (subj)))
+
+;; kmod loader, confined via the rpc.server config-page transition below, also
+;; inherits an rpcd rpc.data fd it never uses — dontaudit, same leak pattern.
+(in kmod.loader
+    (call .rpc.data.dontaudit_readinherited_file_files (subj)))
+
+;; ===========================================================================
+;; rpc.server / cgiio — LuCI config-page rendering (Network/System/Services)
+;; ===========================================================================
+;; Loading the config-edit pages drives rpcd to read LuCI + generic data and the
+;; apk repo config (attended-sysupgrade's update check), and to run the kmod
+;; loader (confine it — absorbs the modules.file map); cgi-io reads shared /tmp.
+;; View path only — Save&Apply's reload path shares these same domains.
+
+(in rpc.server
+    (call .luci.data.list_file_dirs (subj))
+    (call .luci.data.read_file_files (subj))
+    (call .data.list_file_dirs (subj))
+    (call .apk.conf.read_file_files (subj))
+    (call .apk.conf.list_file_dirs (subj))
+    (call .tmp.manage_fs_files (subj))
+    (call .kmod.loader.subj_type_transition (subj)))
+
+(in cgiio
+    (call .tmp.manage_fs_files (subj)))
+
+;; ===========================================================================
+;; boarddetect — manage the /tmp tmpfs dir that holds board.json
+;; ===========================================================================
+;; Boot-time denials (pre-auditd, kernel-log only): dir tmp.fs
+;; {write add_name remove_name} by comm=mv in boarddetect.subj. board_detect
+;; stages /tmp/board.json through .board.json.tmp then `mv`s it into place. The
+;; board.json / .board.json.tmp FILES are the private `board` type (boardfile.cil
+;; filecon + name type_transition) and are already covered by the base domain's
+;; .board.manage_file_files — but the /tmp directory they live in is the shared
+;; tmp.fs type, which boarddetect could not add_name/remove_name. Grant the dir
+;; analog of the tmp.manage_fs_files idiom (the same pairing sshsftp uses); the
+;; files stay covered by .board, so no manage_fs_files is needed here.
+
+(in boarddetect
+    (call .tmp.manage_fs_dirs (subj)))
+
+;; ===========================================================================
+;; fwtool — modify the sysupgrade staging tarball in /tmp
+;; ===========================================================================
+;; Sysupgrade-path denials (permissive, kernel-log during the flash): file
+;; tmp.fs {write ioctl} by comm=fwtool on /tmp/mono-upgrade.*.tar.gz. fwtool
+;; opens the upgrade tarball (created by the sysupgrade script as the shared
+;; tmp.fs type), does a TIOCGWINSZ ioctl (0x5413) and strips/rewrites its
+;; metadata trailer in place. It reads the file via the agent template but
+;; could not write or ioctl the tmp.fs type. readwrite_fs_files is the narrow
+;; fit — readwrite_file = {append getattr ioctl lock open read write}, exactly
+;; the missing perms and no create/unlink (the script owns the file lifecycle).
+
+(in fwtool
+    (call .tmp.readwrite_fs_files (subj)))
+
+;; ===========================================================================
+;; LuCI overview/status collectors — luci.peeraddr / cgiio / ubus / devstatus /
+;; ipcalc
+;; ===========================================================================
+;; Rendering the LuCI Status overview drives rpcd + cgi-io to run the network
+;; status collectors. Harvested (permissive) on a view path the base harvest
+;; never exercised:
+;;  - luci.peeraddr runs `sort`, which probes its own scheduler (self getsched);
+;;    mirror the hotplug.call self-getsched grant above.
+;;  - cgi-io walks /etc/init.d collecting service state (search on the
+;;    initscript.file dirs) — the same interface luci uses above.
+;;  - ubus, exec'd under cgi-io's exec-streaming backend, writes its output back
+;;    to the inherited cgi-io pipe (cgiio.subj fifo).
+;;  - devstatus + ipcalc.sh, run by rpcd, use rpcd's inherited stdio fd and read
+;;    the LuCI ucode lib (sys.uc = ucode.data) plus the rpcd ucode plugins
+;;    (luci.upnp = rpc.data) — the same data the ucode / rpc.server domains
+;;    already read.
+
+(in luci.peeraddr
+    (allow subj self (process (getsched))))
+
+(in cgiio
+    (call .initscript.search_file_dirs (subj)))
+
+(in ubus
+    (call .cgiio.readwriteinherited_subj_fifo_files (subj)))
+
+(in devstatus
+    (call .rpc.server.use_subj_fds (subj))
+    (call .rpc.data.list_file_dirs (subj))
+    (call .rpc.data.read_file_files (subj))
+    (call .ucode.data.list_file_dirs (subj))
+    (call .ucode.data.read_file_files (subj)))
+
+(in ipcalc
+    (call .rpc.server.use_subj_fds (subj))
+    (call .rpc.data.list_file_dirs (subj))
+    (call .rpc.data.read_file_files (subj))
+    (call .ucode.data.list_file_dirs (subj))
+    (call .ucode.data.read_file_files (subj)))
+
+;; rpcd also runs vnstat in-domain (no transition, like nlbwmon) for the LuCI
+;; traffic graph — it reads the vnstat DB under /tmp/lib/vnstat (libtmp.file):
+;; getattr/read/open/lock, all covered by read_file_files.
+(in rpc.server
+    (call .libtmp.list_file_dirs (subj))
+    (call .libtmp.read_file_files (subj)))
+
+;; LuCI Diagnostics page runs ping + traceroute in-domain under cgi-io (no dssp
+;; domain to transition to). ping opens a raw ICMP socket (net_raw) + a udp
+;; probe socket; traceroute drops privs (setuid/setgid) and opens raw + udp
+;; sockets; both node_bind to net.netnode. Same cap + socket idiom the mtr
+;; domain carries — create_{rawip,udp}_socket cover the create/rw/bind/connect/
+;; setopt/getattr perms harvested.
+(in cgiio
+    (allow subj self (capability (net_raw setgid setuid)))
+    (allow subj self create_rawip_socket)
+    (allow subj self create_udp_socket)
+    (call .net.nodebind_netnode_rawip_sockets (subj))
+    (call .net.nodebind_netnode_udp_sockets (subj)))
+
+;; ===========================================================================
+;; netif.server (netifd) — create a tcp socket
+;; ===========================================================================
+;; netifd opens a tcp socket (a reachability/connectivity probe, surfaced by
+;; the VLAN + bridge reconfiguration churn). Self-typed; only { create } was
+;; harvested, but grant the create_tcp_socket classpermset (create + the
+;; standard socket ops) so a follow-on connect/read does not resurface.
+
+(in netif.server
+    (allow subj self create_tcp_socket))

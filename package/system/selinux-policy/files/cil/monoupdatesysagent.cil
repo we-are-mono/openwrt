@@ -1,0 +1,66 @@
+;; monoupdatesysagent.cil — mono_update_t (HIGH-CONSEQUENCE: can trigger a flash)
+;; cron-spawned mono-update-check (/bin/sh: curl -> usign -> sysupgrade). busybox crond has NO dssp
+;; domain => runs sys.subj => transition fires by the same template. The binary physically lives at
+;; /usr/sbin/mono-update-check, but the filecon MUST use the /usr/bin canonical path:
+;; file_contexts.subs_dist maps /usr/sbin -> /usr/bin, so a /usr/sbin/* filecon is never consulted
+;; (the lookup hits the /usr/bin/.* exec catch-all and the domain never transitions).
+(block monoupdate
+
+  (blockinherit .sys.agent.template)
+
+  (allow subj self create_tcp_stream_socket)
+
+  (call .shell.client.type (subj))                      ;; exec busybox/coreutils
+  (call .dns.client.type (subj))
+
+  (call .net.nodebind_netnode_tcp_sockets (subj))
+  (call .http.reserved.nameconnect_port_tcp_sockets (subj))         ;; port 80 (redirect)
+  (call .http.secure.reserved.nameconnect_port_tcp_sockets (subj))  ;; port 443 (HTTPS OTA)
+
+  ;; ca-bundle TLS trust store (acmesysagent pattern)
+  (call .cert.list_file_dirs (subj))
+  (call .cert.read_file_files (subj))
+  (call .cert.read_file_lnk_files (subj))
+
+  ;; run /usr/bin/usign in mono_update_t to verify the release signature
+  ;; (acme's helper-exec idiom; usign exposes no 1-arg subj_type_transition)
+  (call .usign.exec.execute_file_files (subj))
+
+  ;; TODO(avc): transition into the sysupgrade domain when a flash is triggered.
+  ;;   Real macro is .sysupgrade.exec.subj_type_transition (2-arg;
+  ;;   file/datafile/dataexecfile/sysupgradedataexecfile.cil:22-27). Pin from permissive AVCs.
+  ;; NOTE: .net.egress_netifs / .net.sendto_nodes intentionally left for AVC discovery on the HTTPS path.
+
+  (call .log.server.unix_dgram_send (subj))
+
+  (call conf.list_file_dirs (subj))                     ;; /etc/mono-keys/ (private daemon-owned)
+  (call conf.read_file_files (subj))                    ;; /etc/mono_release + keys (private daemon-owned)
+
+  ;; /etc/config/mono-update is a UCI config: it MUST stay the generic conf.file type so `uci`
+  ;; (uci.subj) can manage it. monoupdate only READS it -> generic conf read (no private label).
+  (call .conf.read_file_files (subj))
+
+  (block conf
+
+    ;; daemon-owned (NOT UCI): keep private so only mono_update_t reads them
+    (filecon "/etc/mono_release"       file file_context)
+    (filecon "/etc/mono-keys(/.*)?"    any  file_context)
+
+    (macro conf_file_type_transition_file ((type ARG1))
+      (call .conf.file_type_transition
+        (ARG1 file file "mono_release")))
+
+    (blockinherit .file.conf.template)))
+
+(in file.unconfined
+
+  (call .monoupdate.conf.conf_file_type_transition_file (typeattr))
+  (call .monoupdate.exec.exec_file_type_transition_file (typeattr)))
+
+(in after monoupdate.exec
+
+  (filecon "/usr/bin/mono-update-check" file file_context)   ;; canonical path (binary is /usr/sbin/mono-update-check)
+
+  (macro exec_file_type_transition_file ((type ARG1))
+    (call .exec.file_type_transition
+      (ARG1 file file "mono-update-check"))))

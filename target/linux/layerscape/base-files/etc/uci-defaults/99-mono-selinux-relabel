@@ -1,0 +1,18 @@
+#!/bin/sh
+# First-boot SELinux relabel for the Mono Gateway ext4 rootfs.
+#
+# The image rootfs is labeled at BUILD time (setfiles + mkfs.ext4 -d, see
+# include/image.mk Image/mkfs/ext4), so daemons come up in their correct domains on the
+# first boot with NO reboot needed. This pass only fixes files that arrive AFTER the
+# image is built — chiefly config restored from sysupgrade.tgz, which busybox tar untars
+# into / without security xattrs. Permissive during bring-up, so a missed label is
+# logged, not fatal. Runs once (uci-defaults removes it on exit 0).
+
+[ -d /sys/fs/selinux ] || exit 0
+command -v restorecon >/dev/null 2>&1 || exit 0
+
+# file_contexts is resolved from /etc/selinux/config's SELINUXTYPE by libselinux.
+# No-op for the build-time-labeled image files; fixes restored config.
+restorecon -RF / 2>/dev/null
+
+exit 0

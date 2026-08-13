@@ -1,0 +1,16 @@
+;; cdxctrlnodedev.cil — private label for /dev/cdx_ctrl
+;; char dev created by cdx.ko; devtmpfs auto-creates the node. Granted ONLY to cmm_t + dpaapp_t.
+;; Mirrors dev/nodedev/pppnodedev.cil verbatim.
+(block cdxctrl
+
+  (filecon "/dev/cdx_ctrl" char nodedev_context)
+
+  (macro tmp_fs_type_transition_nodedev ((type ARG1))
+    (call .tmp.fs_type_transition
+      (ARG1 nodedev chr_file "cdx_ctrl")))
+
+  (blockinherit .nodedev.template))
+
+(in nodedev.unconfined
+
+  (call .cdxctrl.tmp_fs_type_transition_nodedev (typeattr)))

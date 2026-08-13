@@ -413,6 +413,8 @@ define Build/mono-bootfs
 	mkdir -p $@.bootdir/boot/extlinux
 	$(CP) $(IMAGE_KERNEL) $@.bootdir/boot/Image.gz
 	$(CP) $(DEVICE_DTS_DIR)/$(DEVICE_DTS).dtb $@.bootdir/boot/
+	# SELinux mode is set by /etc/selinux/config (SELINUX=permissive during bring-up);
+	# a kernel `enforcing=` arg here is overridden at policy load, so it's not used.
 	printf 'label OpenWrt\n\tkernel /boot/Image.gz\n\tfdt /boot/%s.dtb\n\tappend root=/dev/mmcblk0p2 rootwait console=ttyS0,115200 earlycon=uart8250,mmio,0x21c0500\n' \
 		"$(DEVICE_DTS)" > $@.bootdir/boot/extlinux/extlinux.conf
 	# Backup GPT (33-sector tail) travels in the boot partition; first boot
@@ -450,10 +452,11 @@ define Device/mono_gateway-dk
   DEVICE_MODEL := Gateway DK
   DEVICE_PACKAGES := kmod-ask-cdx kmod-ask-fci kmod-ask-auto-bridge \
 	cmm dpa-app fmc kmod-leds-lp5812 kmod-sfp-led fancontrol \
-	luci-ssl luci-app-statistics luci-app-attendedsysupgrade \
+	luci-light libustream-mbedtls px5g-mbedtls -luci-app-package-manager \
+	luci-app-statistics luci-app-attendedsysupgrade \
 	kmod-wireguard wireguard-tools luci-proto-wireguard \
 	strongswan strongswan-default strongswan-mod-openssl openvpn-openssl luci-app-openvpn tailscale \
-	sqm-scripts luci-app-sqm nlbwmon luci-app-nlbwmon \
+	nlbwmon luci-app-nlbwmon \
 	adblock luci-app-adblock https-dns-proxy luci-app-https-dns-proxy \
 	banip luci-app-banip \
 	vnstat2 luci-app-vnstat2 htop iftop mtr tcpdump iperf3 \
@@ -464,7 +467,8 @@ define Device/mono_gateway-dk
 	kmod-fs-vfat smartmontools usbutils pciutils i2c-tools \
 	tmux vim-full curl rsync jq less bind-dig openssh-sftp-server \
 	usign ca-bundle file ip-full resize2fs mono-update-check \
-	cmmqos
+	cmmqos \
+	policycoreutils-setfiles policycoreutils-sestatus
   KERNEL_NAME := Image
   KERNEL := kernel-bin | gzip
   FILESYSTEMS := ext4
