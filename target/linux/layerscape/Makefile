@@ -46,7 +46,7 @@ DEFAULT_PACKAGES += kmod-usb3 kmod-usb-dwc3 kmod-usb-storage \
 # repository is fetched at a pinned revision and its kernel patch series is
 # applied, followed by the OpenWrt-integration patches in patches-ask/
 # (cherry-picks from the generic stack that OpenWrt userspace depends on).
-ASK_VERSION:=fe36f305a473d4121cf8613cc8c8c5a8496d8c48
+ASK_VERSION:=d85724d36f0b3f2e6e143a5333ad59b0231f9871
 ASK_SOURCE:=ask-$(ASK_VERSION).tar.xz
 ASK_SUBDIR:=ask-$(ASK_VERSION)
 

@@ -1,7 +1,7 @@
 # Single source of truth for the ASK revision used by all ASK packages.
 # Must match ASK_VERSION in target/linux/layerscape/Makefile so the kernel
 # patches and the userspace/modules always come from the same commit.
-ASK_VERSION:=fe36f305a473d4121cf8613cc8c8c5a8496d8c48
+ASK_VERSION:=d85724d36f0b3f2e6e143a5333ad59b0231f9871
 ASK_SOURCE:=ask-$(ASK_VERSION).tar.xz
 ASK_SOURCE_URL:=https://github.com/we-are-mono/ASK
 
