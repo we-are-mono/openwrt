@@ -275,7 +275,10 @@
     (call .class.read_sysfile_lnk_files (subj))
     (call .bus.list_sysfile_dirs (subj))
     (call .bus.read_sysfile_lnk_files (subj))
-    (call .sys.getattr_fs (subj)))
+    (call .sys.getattr_fs (subj))
+    ;; /sys/kernel/mm/hugepages + nr_hugepages — hugepage stats htop reads (dir list + file read)
+    (call .kernel.list_sysfile_dirs (subj))
+    (call .kernel.read_sysfile_files (subj)))
 
 ;; ===========================================================================
 ;; cgiio (cgi-io) — LuCI firewall/realtime pages: query nftables via netlink
@@ -437,6 +440,13 @@
 (in rpc.server
     (call .libtmp.list_file_dirs (subj))
     (call .libtmp.read_file_files (subj)))
+
+;; vnstat ALSO runs under cgi-io (the LuCI traffic graph can be driven via cgi-io, not just rpcd):
+;; same DB read under /tmp/lib/vnstat (libtmp.file) plus /dev/urandom. Mirror of the rpc.server grants.
+(in cgiio
+    (call .libtmp.list_file_dirs (subj))
+    (call .libtmp.read_file_files (subj))
+    (call .random.read_nodedev_chr_files (subj)))
 
 ;; LuCI Diagnostics page runs ping + traceroute in-domain under cgi-io (no dssp
 ;; domain to transition to). ping opens a raw ICMP socket (net_raw) + a udp

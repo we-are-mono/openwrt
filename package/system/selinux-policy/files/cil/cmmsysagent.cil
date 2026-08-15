@@ -24,6 +24,7 @@
   (allow subj self (process (getpgid)))                ;; query own process-group id
 
   (call .net.nodebind_netnode_tcp_sockets (subj))
+  (call .net.nodebind_netnode_rawip_sockets (subj))    ;; node_bind the raw v6 socket to the br-lan link-local (fe80::)
   (call .net.egress_netifs (subj))
   (call .net.sendto_nodes (subj))
   (call .net.port.unreserved.namebind_all_tcp_sockets (subj))  ;; loopback CLI listener binds an ephemeral tcp port
@@ -37,6 +38,11 @@
   ;; is a DISTINCT type from the net.sysctlfile written above.
   (call .ipv4.search_sysctlfile_dirs (subj))           ;; traverse /proc/sys/net/ipv4[/route]
   (call .ipv4.write_sysctlfile_files (subj))            ;; write route/flush (write_file incl. open)
+
+  ;; flush the IPv6 route cache (/proc/sys/net/ipv6/route/flush) too — parallel to the ipv4 flush
+  ;; above; ipv6.sysctlfile is again a DISTINCT type. cmm hits this on every offload route change.
+  (call .ipv6.search_sysctlfile_dirs (subj))           ;; traverse /proc/sys/net/ipv6[/route]
+  (call .ipv6.write_sysctlfile_files (subj))            ;; write route/flush (write_file incl. open)
 
   ;; read /proc/net/* (route/conntrack tables). /proc/net is a symlink => lnk_file read too.
   (call .net.read_procfile_files (subj))                ;; (file (open read))
