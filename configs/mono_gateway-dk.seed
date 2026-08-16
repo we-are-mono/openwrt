@@ -82,8 +82,10 @@ CONFIG_PACKAGE_adguardhome=y
 # Wi-Fi: u-blox JODY-W3 = NXP 88W9098 (Wi-Fi 6), PCIe, dual-MAC. Out-of-tree NXP
 # moal/mlan driver (kmod-nxp-mwifiex — a cfg80211 FULLMAC driver; needs the
 # backports-version patch carried in package/kernel/nxp-mwifiex) + its firmware pkg.
-# Full wpad-openssl, NOT wpad-basic: basic hostapd can't parse VHT(ac)/HE(ax)
-# config items and fails add_iface on anything above 802.11n. iw for debugging.
+# wpad-openssl (full) is necessary but NOT sufficient for VHT(ac)/HE(ax): hostapd's
+# 11ac/11ax code is gated on DRIVER_11AC/AX_SUPPORT, which the nxp-mwifiex kmod now
+# select-s in its DEPENDS (we build no kmod-mac80211 to do it). Without both, wpad is
+# HT-only (Wi-Fi 4) and add_iface fails on any vht_*/he_* item. iw for debugging.
 # defconfig pulls the rest (kmod-cfg80211, wifi-scripts, wireless-regdb,
 # hostapd-common, ucode-mod-nl80211). LuCI manages the radios natively via
 # mac80211.sh (no custom handler); harmless no-op on a board with no M.2 card.

@@ -28,7 +28,12 @@ define KernelPackage/nxp-mwifiex
   SUBMENU:=Wireless Drivers
   TITLE:=NXP 88W9098 (moal/mlan) PCIe Wi-Fi driver
   URL:=https://github.com/nxp-imx/mwifiex
-  DEPENDS:=@PCI_SUPPORT +kmod-cfg80211 +nxp-wifi-firmware-9098-pcie
+  # +@DRIVER_11AC/AX_SUPPORT: hostapd's VHT(11ac)/HE(11ax) code is gated on these
+  # symbols, normally select-ed by mac80211 driver pkgs. We build no kmod-mac80211
+  # (fullmac needs only cfg80211), so this driver must select them itself — else
+  # wpad is HT-only (Wi-Fi 4) and add_iface fails on any vht_*/he_* config item.
+  # (11AX also auto-selects WPA_MBO_SUPPORT, which aids band steering.)
+  DEPENDS:=@PCI_SUPPORT +kmod-cfg80211 +nxp-wifi-firmware-9098-pcie +@DRIVER_11AC_SUPPORT +@DRIVER_11AX_SUPPORT
   FILES:= \
 	$(PKG_BUILD_DIR)/mlan.ko \
 	$(PKG_BUILD_DIR)/moal.ko
