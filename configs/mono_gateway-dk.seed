@@ -94,6 +94,14 @@ CONFIG_PACKAGE_nxp-wifi-firmware-9098-pcie=y
 CONFIG_PACKAGE_wpad-openssl=y
 CONFIG_PACKAGE_iw=y
 
+# usteer: single-SSID dual-band band-steering daemon — pushes 5 GHz-capable STAs to
+# 5 GHz and BTM-nudges sticky clients (relies on the 802.11k/v rrm_*/bss_transition
+# set on the wifi-ifaces). luci-app-usteer adds the LuCI steering config + status UI.
+# New daemon on permissive dssp -> carries its own AVC fixes in selinux-policy.
+# Harmless no-op on a board with no radios (no APs to steer).
+CONFIG_PACKAGE_usteer=y
+CONFIG_PACKAGE_luci-app-usteer=y
+
 # Drop LuCI's Software (apk) WEB frontend only. It made the cgi-io helper exec apk,
 # dragging a large SELinux AVC surface (apk data/conf/cache reads + exec) into the
 # web path, and web-driven package management isn't our delivery model (sysupgrade
