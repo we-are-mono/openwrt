@@ -1,6 +1,6 @@
 let libubus = require("ubus");
 import { open, readfile, access } from "fs";
-import { wdev_remove, is_equal, vlist_new, phy_is_fullmac, phy_open, wdev_set_radio_mask, wdev_set_up } from "common";
+import { wdev_remove, is_equal, vlist_new, phy_is_fullmac, phy_open, wdev_set_radio_mask, wdev_set_up, reusable_macaddr } from "common";
 
 let ubus = libubus.connect(null, 60);
 
@@ -330,8 +330,20 @@ function iface_restart(phydev, config, old_config)
 	iface_macaddr_init(phydev, config, iface_config_macaddr_list(config));
 	for (let i = 0; i < length(config.bss); i++) {
 		let bss = config.bss[i];
-		if (bss.default_macaddr)
-			bss.bssid = phydev.macaddr_next();
+		if (bss.default_macaddr) {
+			/*
+			 * Fullmac vendor drivers (e.g. NXP mwifiex) pre-create one
+			 * vif per role with a firmware-assigned per-role MAC and a
+			 * matching firmware BSS. macaddr_next() derives a softmac-
+			 * style address from the phy base that does NOT match the
+			 * uAP vif's native MAC/BSS; hostapd then programs that MAC
+			 * as the BSSID, the firmware drops the client's uplink as
+			 * "unknown BSSID" and the 4-way handshake never completes.
+			 * For the primary BSS reuse the native uAP MAC instead.
+			 */
+			let reuse = i == 0 ? reusable_macaddr(phydev.phy, "ap") : null;
+			bss.bssid = reuse ?? phydev.macaddr_next();
+		}
 	}
 
 	iface_pending_init(phydev, config);

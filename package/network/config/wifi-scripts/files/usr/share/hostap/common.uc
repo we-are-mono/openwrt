@@ -59,7 +59,7 @@ function phy_is_fullmac(phy)
 	return __phy_is_fullmac(phyidx);
 }
 
-function find_reusable_wdev(phyidx)
+function find_reusable_wdev(phyidx, iftype)
 {
 	if (!__phy_is_fullmac(phyidx))
 		return null;
@@ -68,10 +68,24 @@ function find_reusable_wdev(phyidx)
 		nl80211.const.NL80211_CMD_GET_INTERFACE,
 		nl80211.const.NLM_F_DUMP,
 		{ wiphy: phyidx });
-	for (let res in data)
-		if (trim(readfile(`/sys/class/net/${res.ifname}/operstate`)) == "down")
-			return res.ifname;
-	return null;
+	let fallback = null;
+	for (let res in data) {
+		if (trim(readfile(`/sys/class/net/${res.ifname}/operstate`)) != "down")
+			continue;
+		/*
+		 * Prefer reusing a wdev that is already of the requested type.
+		 * Fullmac drivers that pre-create one vif per role (e.g. NXP
+		 * mwifiex: mlanN/uapN/wfdN) mishandle converting a STA/P2P vif
+		 * into an AP via SET_INTERFACE: the firmware BSS/EAPOL path is
+		 * left broken, so clients associate but the 4-way handshake never
+		 * completes. Reusing the existing AP vif avoids the type change.
+		 */
+		if (iftype != null && res.iftype == iftype)
+			return res;
+		if (fallback == null)
+			fallback = res;
+	}
+	return fallback;
 }
 
 function wdev_set_radio_mask(name, mask)
@@ -108,13 +122,25 @@ function wdev_create(phy, name, data)
 
 	nl80211.error();
 
-	let reuse_ifname = find_reusable_wdev(phyidx);
+	let reuse = find_reusable_wdev(phyidx, req.iftype);
+	let reuse_ifname = reuse ? reuse.ifname : null;
 	if (reuse_ifname &&
 	    (reuse_ifname == name ||
 	     rtnl.request(rtnl.const.RTM_SETLINK, 0, { dev: reuse_ifname, ifname: name}) != false)) {
 		req.dev = req.ifname;
 		delete req.ifname;
-		nl80211.request(nl80211.const.NL80211_CMD_SET_INTERFACE, 0, req);
+		/*
+		 * Keep the reused fullmac vif's own MAC. Vendor fullmac drivers
+		 * (e.g. NXP mwifiex) pre-assign a per-role MAC to each vif and
+		 * reject a foreign one ("Bad address"), re-deriving a MAC that no
+		 * longer matches the firmware BSS -- clients then associate but the
+		 * 4-way handshake never completes. And if the reused vif is already
+		 * of the requested type, skip SET_INTERFACE entirely: a plain rename
+		 * leaves the driver's native AP vif (and its working BSS) untouched.
+		 */
+		delete req.mac;
+		if (reuse.iftype != req.iftype)
+			nl80211.request(nl80211.const.NL80211_CMD_SET_INTERFACE, 0, req);
 	} else {
 		nl80211.request(
 			nl80211.const.NL80211_CMD_NEW_INTERFACE,
@@ -420,4 +446,30 @@ function vlist_new(cb) {
 	}, vlist_proto);
 }
 
-export { wdev_remove, wdev_create, wdev_set_mesh_params, wdev_set_radio_mask, wdev_set_up, is_equal, vlist_new, phy_is_fullmac, phy_open };
+/*
+ * For fullmac drivers that pre-create one vif per role (e.g. NXP mwifiex:
+ * mlanN/uapN/wfdN), the generated softmac-style MAC is the phy base address,
+ * which already belongs to the STA vif. Assigning it to the AP collides, the
+ * driver keeps the AP vif's own MAC instead, and hostapd's bssid ends up out of
+ * sync with the actual vif -- breaking the EAPOL path (clients associate but the
+ * 4-way handshake never completes). Return the reusable (matching-mode, down)
+ * vif's real MAC so the caller programs that as both the vif MAC and the bssid.
+ */
+function reusable_macaddr(phy, mode)
+{
+	let phyidx = int(trim(readfile(`/sys/class/ieee80211/${phy}/index`)));
+	if (!__phy_is_fullmac(phyidx))
+		return null;
+
+	let iftype = iftypes[mode];
+	if (iftype == null)
+		return null;
+
+	let wdev = find_reusable_wdev(phyidx, iftype);
+	if (!wdev)
+		return null;
+
+	return wdev_macaddr(wdev.ifname);
+}
+
+export { wdev_remove, wdev_create, wdev_set_mesh_params, wdev_set_radio_mask, wdev_set_up, is_equal, vlist_new, phy_is_fullmac, phy_open, reusable_macaddr };

@@ -46,7 +46,14 @@ function iface_setup(config) {
 	if (config.proxy_arp)
 		set_default(config, 'na_mcast_to_ucast', true);
 
-	append('bssid', config.macaddr);
+	/*
+	 * Only pin an explicit bssid when the user configured a MAC. For an
+	 * auto-assigned MAC, let hostapd use the interface's own address:
+	 * fullmac drivers may own the vif MAC and reject a forced one, which
+	 * desyncs the bssid from the vif and breaks the 4-way handshake.
+	 */
+	if (!config.default_macaddr)
+		append('bssid', config.macaddr);
 	config.ssid2 = config.ssid;
 	config.wmm_enabled = 1;
 	append_string_vars(config, [ 'ssid2' ]);
