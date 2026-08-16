@@ -228,6 +228,7 @@
 
     ;; rpcd-native system-state reads (not attributable to a confined helper)
     (call .firmware.data.list_file_dirs (subj))
+    (call .firmware.data.read_file_files (subj))       ;; getattr /lib/firmware/regulatory.db (wireless-regdb, Wi-Fi)
     (call .preinit.data.list_file_dirs (subj))
     (call .preinit.data.read_file_files (subj))
     (call .netif.data.list_file_dirs (subj))
@@ -471,3 +472,11 @@
 
 (in netif.server
     (allow subj self create_tcp_socket))
+
+;; hostapd built with OpenSSL (wpad-openssl — needed for the JODY-W3/9098 Wi-Fi
+;; VHT/HE APs; wpad-basic can't parse VHT/HE hostapd config items) links libssl,
+;; which reads its provider/engine config under /tmp/etc/ssl (openssl.conftmp) at
+;; startup: search the dir + getattr/open/read providers.cnf/engines.cnf.
+(in wpa.server
+    (call .openssl.conftmp.search_file_dirs (subj))
+    (call .openssl.conftmp.read_file_files (subj)))
