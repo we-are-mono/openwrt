@@ -555,6 +555,12 @@ function setup_interface(interface, data, config, vlans, stas, phy_features, fix
 	ap.generate(interface, data, config, vlans, stas, phy_features);
 }
 
+function is_fullmac_phy(phy) {
+	let idx = int(fs.readfile(`/sys/class/ieee80211/${phy}/index`));
+	let info = nl80211.request(nl80211.const.NL80211_CMD_GET_WIPHY, 0, { wiphy: idx });
+	return info && info.software_iftypes && !info.software_iftypes.monitor;
+}
+
 export function setup(data) {
 	let file_name = `/var/run/hostapd-${data.phy}${data.vif_phy_suffix}.conf`;
 
@@ -579,6 +585,20 @@ export function setup(data) {
 
 		interface.config.network_bridge = interface.bridge;
 		interface.config.network_ifname = interface['bridge-ifname'];
+
+		/*
+		 * bug #2: fullmac vendor drivers (e.g. NXP mwifiex) carry EAPOL over the
+		 * netdev, not nl80211's control port. On a vlan_filtering bridge the
+		 * client's 4-way-handshake frames arrive VLAN-tagged on the raw bridge,
+		 * so hostapd -- whose EAPOL socket listens there -- never matches them and
+		 * the handshake stalls (client associates, then "wrong password"). Point
+		 * hostapd's bridge at the VLAN interface (br-lan.X) where those frames
+		 * surface untagged. mac80211 uses the control port and is unaffected, so
+		 * gate on fullmac; no-op when the network is not a bridge-VLAN.
+		 */
+		if (interface.bridge && interface.bridge != interface['bridge-ifname'] &&
+		    is_fullmac_phy(data.phy))
+			interface.config.network_bridge = interface['bridge-ifname'];
 
 		let owe = interface.config.encryption == 'owe' && interface.config.owe_transition;
 
