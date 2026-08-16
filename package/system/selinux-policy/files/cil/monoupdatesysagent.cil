@@ -1,8 +1,13 @@
 ;; monoupdatesysagent.cil — mono_update_t (HIGH-CONSEQUENCE: can trigger a flash)
-;; cron-spawned mono-update-check (/bin/sh: curl -> usign -> sysupgrade). busybox crond has NO dssp
-;; domain => runs sys.subj => transition fires by the same template. The binary physically lives at
-;; /usr/sbin/mono-update-check, but the filecon MUST use the /usr/bin canonical path:
-;; file_contexts.subs_dist maps /usr/sbin -> /usr/bin, so a /usr/sbin/* filecon is never consulted
+;; Two entry paths reach /usr/sbin/mono-update and BOTH transition into this domain:
+;;   - cron / an interactive shell run `mono-update --check|--install`. busybox crond has NO dssp
+;;     domain => runs sys.subj (in file.unconfined) => transitions via the exec type_transition below.
+;;   - the LuCI "Updates" page calls it via rpcd (/usr/libexec/rpcd/mono-update -> start-stop-daemon
+;;     -> mono-update). rpc.server.subj is given a subj_type_transition into monoupdate at the bottom
+;;     of this file, so the rpcd-triggered run is confined identically (it otherwise execute_no_trans'd
+;;     the binary and ran the whole updater as rpc.server.subj).
+;; The binary physically lives at /usr/sbin/mono-update, but the filecon MUST use the /usr/bin canonical
+;; path: file_contexts.subs_dist maps /usr/sbin -> /usr/bin, so a /usr/sbin/* filecon is never consulted
 ;; (the lookup hits the /usr/bin/.* exec catch-all and the domain never transitions).
 (block monoupdate
 
@@ -26,10 +31,37 @@
   ;; (acme's helper-exec idiom; usign exposes no 1-arg subj_type_transition)
   (call .usign.exec.execute_file_files (subj))
 
-  ;; TODO(avc): transition into the sysupgrade domain when a flash is triggered.
-  ;;   Real macro is .sysupgrade.exec.subj_type_transition (2-arg;
-  ;;   file/datafile/dataexecfile/sysupgradedataexecfile.cil:22-27). Pin from permissive AVCs.
-  ;; NOTE: .net.egress_netifs / .net.sendto_nodes intentionally left for AVC discovery on the HTTPS path.
+  ;; run /usr/bin/curl (a generic exec.file) in-domain for the OTA fetch, the
+  ;; way acme runs its own helpers.
+  (call .exec.execute_file_files (subj))
+
+  ;; Parse the signed manifest (jsonfilter) and read UCI (uci) in their own
+  ;; confined domains, the way rpc.server and cmm do — not execute_no_trans.
+  (call .jsonfilter.subj_type_transition (subj))
+  (call .uci.subj_type_transition (subj))
+
+  ;; board_name() sources /lib/functions.sh and reads /tmp/sysinfo/board_name;
+  ;; the fleet-jitter/anti-rollback bits read /dev/urandom.
+  (call .functions.client.type (subj))
+  (call .random.read_nodedev_chr_files (subj))
+  (call .sysinfo.tmp.list_file_dirs (subj))
+  (call .sysinfo.tmp.read_file_files (subj))
+
+  ;; /tmp/mono-update workdir (downloaded manifest, signature, image) and the
+  ;; /tmp/mono-update-available tag file: created, written and removed here.
+  (call .tmp.manage_fs_dirs (subj))
+  (call .tmp.manage_fs_files (subj))
+
+  ;; The rpcd/LuCI entry path leaks ucode fds across the exec into monoupdate
+  ;; (/usr/share/ucode/luci/sys.uc, /usr/share/rpcd/ucode/luci); the updater
+  ;; never uses them — silence the inherited-fd reads (dontaudit, not a grant).
+  (call .ucode.data.dontaudit_readinherited_file_files (subj))
+  (call .rpc.data.dontaudit_readinherited_file_files (subj))
+
+  ;; TODO(avc): transition into the sysupgrade domain when `--install` flashes.
+  ;;   Macro is .sysupgrade.exec.subj_type_transition (2-arg; sysupgradedataexecfile.cil:20-27).
+  ;;   Cannot be exercised until the server offers a release newer than the DUT runs (otherwise
+  ;;   --install stops at "up to date" before sysupgrade); pin from those AVCs when it can run.
 
   (call .log.server.unix_dgram_send (subj))
 
@@ -59,8 +91,16 @@
 
 (in after monoupdate.exec
 
-  (filecon "/usr/bin/mono-update-check" file file_context)   ;; canonical path (binary is /usr/sbin/mono-update-check)
+  (filecon "/usr/bin/mono-update" file file_context)   ;; canonical path (binary is /usr/sbin/mono-update)
 
   (macro exec_file_type_transition_file ((type ARG1))
     (call .exec.file_type_transition
-      (ARG1 file file "mono-update-check"))))
+      (ARG1 file file "mono-update"))))
+
+;; The LuCI "Updates" page drives the updater through rpcd: /usr/libexec/rpcd/mono-update runs
+;; `mono-update --check` and (via start-stop-daemon) `mono-update --install`. Transition rpc.server.subj
+;; into monoupdate on that exec — otherwise the whole updater runs in rpc.server.subj — and let the rpcd
+;; object read the private /etc/mono_release that its `status`/`check` methods cat directly.
+(in rpc.server
+  (call .monoupdate.subj_type_transition (subj))
+  (call .monoupdate.conf.read_file_files (subj)))

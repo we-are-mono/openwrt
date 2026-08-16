@@ -453,7 +453,7 @@ define Device/mono_gateway-dk
   DEVICE_PACKAGES := kmod-ask-cdx kmod-ask-fci kmod-ask-auto-bridge \
 	cmm dpa-app fmc kmod-leds-lp5812 kmod-sfp-led fancontrol \
 	luci-light libustream-mbedtls px5g-mbedtls -luci-app-package-manager \
-	luci-app-statistics luci-app-attendedsysupgrade \
+	luci-app-statistics \
 	kmod-wireguard wireguard-tools luci-proto-wireguard \
 	strongswan strongswan-default strongswan-mod-openssl openvpn-openssl luci-app-openvpn tailscale \
 	nlbwmon luci-app-nlbwmon \
@@ -466,7 +466,7 @@ define Device/mono_gateway-dk
 	block-mount kmod-usb-storage-uas kmod-fs-exfat kmod-fs-ntfs3 \
 	kmod-fs-vfat smartmontools usbutils pciutils i2c-tools \
 	tmux vim-full curl rsync jq less bind-dig openssh-sftp-server \
-	usign ca-bundle file ip-full resize2fs mono-update-check \
+	usign ca-bundle file ip-full resize2fs mono-update luci-app-mono-update \
 	cmmqos \
 	policycoreutils-setfiles policycoreutils-sestatus
   KERNEL_NAME := Image

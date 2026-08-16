@@ -1,12 +1,12 @@
 #!/bin/bash
 # End-to-end regression test for the signed-manifest update path. Uses real
 # usign signatures to prove the client:
-#   - flashes a genuine, newer, release-signed release (auto mode);
+#   - on --install, flashes a genuine, newer, release-signed release;
 #   - REFUSES a forged high tag signed by an untrusted key;
 #   - REFUSES a replayed genuine-but-older release (anti-rollback floor);
 #   - REFUSES a post-rollback walk-up (durable floor survives current reset);
 #   - REFUSES a tampered image (hash mismatch under a genuine manifest);
-#   - in notify mode, reports availability WITHOUT emitting an unverified
+#   - on --check, reports availability WITHOUT emitting an unverified
 #     'sysupgrade <url>' and WITHOUT flashing.
 # Plus a static packaging-consistency check for the anti-rollback floor file.
 #
@@ -15,8 +15,8 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../../../.." && pwd)         # .../source
-PKG="$REPO/package/mono/mono-update-check"
-CLIENT="$PKG/files/mono-update-check"
+PKG="$REPO/package/mono/updater"
+CLIENT="$PKG/files/mono-update"
 USIGN="$REPO/staging_dir/host/bin/usign"
 fails=0
 
@@ -100,15 +100,15 @@ for m in r5 r4 r3; do "$USIGN" -S -m "$S/m_$m.json" -s "$S/release.sec"  -x "$S/
 "$USIGN" -S -m "$S/m_bad.json" -s "$S/attacker.sec" -x "$S/m_bad.json.sig"
 
 publish() { cp "$S/$1" "$SRV/latest.json"; cp "$S/$1.sig" "$SRV/latest.json.sig"; }
-run() {  # current floor mode -> sets $out, $got(flash|refuse)
+run() {  # current floor action(--check|--install) -> sets $out, $got(flash|refuse)
 	echo "$1" > "$S/etc/mono_release"
 	rm -f "$S/FLASHED" "$S/etc/mono-update.state"
 	[ -n "$2" ] && printf '%s\n' "$2" > "$S/etc/mono-update.state"
-	out=$(cd "$S" && PATH="$S/bin:$PATH" UCI_MODE="$3" sh "$S/client.sh" 2>&1)
+	out=$(cd "$S" && PATH="$S/bin:$PATH" sh "$S/client.sh" "$3" 2>&1)
 	[ -f "$S/FLASHED" ] && got=flash || got=refuse
 }
 scenario() {  # name expect current floor reason  manifest
-	publish "$6"; run "$3" "$4" auto
+	publish "$6"; run "$3" "$4" --install
 	if [ "$got" != "$2" ] || ! echo "$out" | grep -q "$5"; then
 		echo "FAIL [$1] got=$got want=$2 reason=/$5/"; echo "  $out"; fails=$((fails+1))
 	else echo "ok   [$1] $got ($5)"; fi
@@ -117,24 +117,24 @@ scenario() {  # name expect current floor reason  manifest
 echo "== end-to-end (real usign) =="
 scenario genuine-upgrade      flash  mono-v25.12.5-r3 ""                       SYSUPGRADE             m_r5.json
 scenario forged-tag-bad-key   refuse mono-v25.12.5-r3 ""                       "signature FAILED"     m_bad.json
-scenario replay-old-signed    refuse mono-v25.12.5-r5 "floor=mono-v25.12.5-r5" "not newer than floor" m_r3.json
-scenario floor-walk-up        refuse mono-v25.12.5-r3 "floor=mono-v25.12.5-r5" "not newer than floor" m_r4.json
+scenario replay-old-signed    refuse mono-v25.12.5-r5 "floor=mono-v25.12.5-r5" "older than floor" m_r3.json
+scenario floor-walk-up        refuse mono-v25.12.5-r3 "floor=mono-v25.12.5-r5" "older than floor" m_r4.json
 
 # image tamper: genuine signed r5 manifest, but the served bytes are swapped
 publish m_r5.json
 printf 'TAMPERED' > "$SRV/r5/img-sysupgrade.bin"
-run mono-v25.12.5-r3 "" auto
+run mono-v25.12.5-r3 "" --install
 if [ "$got" = refuse ] && echo "$out" | grep -q "hash mismatch"; then echo "ok   [image-tamper] refuse (hash mismatch)"
 else echo "FAIL [image-tamper] got=$got: $out"; fails=$((fails+1)); fi
 printf 'IMAGE-R5' > "$SRV/r5/img-sysupgrade.bin"   # restore
 
-# notify mode: a genuine newer release must NOT flash and must NOT print a raw
+# --check: a genuine newer release must NOT flash and must NOT print a raw
 # 'sysupgrade <url>' (which would skip verification).
 publish m_r5.json
-run mono-v25.12.5-r3 "" notify
-if [ "$got" = refuse ] && ! echo "$out" | grep -q "file://" && echo "$out" | grep -q "mode=auto"; then
-	echo "ok   [notify-no-raw-flash] refuse, steers to auto"
-else echo "FAIL [notify-no-raw-flash] got=$got: $out"; fails=$((fails+1)); fi
+run mono-v25.12.5-r3 "" --check
+if [ "$got" = refuse ] && ! echo "$out" | grep -q "file://" && echo "$out" | grep -q -- "--install"; then
+	echo "ok   [check-no-raw-flash] refuse, steers to --install"
+else echo "FAIL [check-no-raw-flash] got=$got: $out"; fails=$((fails+1)); fi
 
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILED"; exit 1; fi

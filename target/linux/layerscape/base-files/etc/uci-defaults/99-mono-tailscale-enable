@@ -1,0 +1,18 @@
+#!/bin/sh
+# tailscale's boot-enable (the /etc/rc.d/S*tailscale symlink) lives in the
+# rootfs, which sysupgrade wipes - so a manual `/etc/init.d/tailscale enable`
+# does not survive a flash. This uci-defaults script ships in every image and
+# re-runs on the first boot after each sysupgrade (config restore has already
+# happened in preinit by then), reconciling the enable-state from the PRESERVED
+# /etc/config/tailscale. Default: enabled. Persistently disable with:
+#   uci set tailscale.settings.auto_enable=0; uci commit tailscale
+[ -x /etc/init.d/tailscale ] || exit 0
+en=$(uci -q get tailscale.settings.auto_enable)
+[ -n "$en" ] || en=1
+if [ "$en" = 1 ]; then
+	/etc/init.d/tailscale enable
+	/etc/init.d/tailscale start
+else
+	/etc/init.d/tailscale disable
+fi
+exit 0

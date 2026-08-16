@@ -1,0 +1,53 @@
+#!/bin/sh
+# rpcd object 'mono-update' - exposes the mono-update CLI to LuCI.
+#   status  : cheap, no network - running release + last-known availability
+#   check   : run 'mono-update --check' (hits the server), report result
+#   install : run 'mono-update --install' in the background (reboots the box)
+. /usr/share/libubox/jshn.sh
+
+STATE=/tmp/mono-update-available
+
+case "$1" in
+	list)
+		json_init
+		json_add_object "status";  json_close_object
+		json_add_object "check";   json_close_object
+		json_add_object "install"; json_close_object
+		json_dump
+		;;
+	call)
+		case "$2" in
+			status)
+				avail=0; [ -f "$STATE" ] && avail=1
+				json_init
+				json_add_string  current   "$(cat /etc/mono_release 2>/dev/null)"
+				json_add_boolean available "$avail"
+				json_add_string  tag       "$(cat "$STATE" 2>/dev/null)"
+				json_add_string  url       "$(uci -q get mono-update.check.url)"
+				json_add_string  mode      "$(uci -q get mono-update.check.mode)"
+				json_dump
+				;;
+			check)
+				out=$(/usr/sbin/mono-update --check 2>&1)
+				rc=$?
+				avail=0; [ -f "$STATE" ] && avail=1
+				json_init
+				json_add_int     code      "$rc"
+				json_add_boolean available "$avail"
+				json_add_string  tag       "$(cat "$STATE" 2>/dev/null)"
+				json_add_string  current   "$(cat /etc/mono_release 2>/dev/null)"
+				json_add_string  log       "$out"
+				json_dump
+				;;
+			install)
+				# --install execs sysupgrade and reboots, so it never returns
+				# on success. Detach it so rpcd can still answer this call
+				# before the device goes down.
+				start-stop-daemon -S -b -x /usr/sbin/mono-update -- --install
+				json_init
+				json_add_string status "started"
+				json_dump
+				;;
+		esac
+		;;
+esac

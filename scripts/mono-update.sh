@@ -78,7 +78,7 @@ if [ "$LATEST" != "$BASE" ]; then
 fi
 
 # Tag before building so the image can bake its own release identity
-# (mono-update-check reads it at build time). Dropped again on failure.
+# (mono-update reads it at build time). Dropped again on failure.
 git tag -f "$RELTAG"
 
 # From here on ANY nonzero exit - build, staging, sign, or publish - removes
@@ -111,12 +111,12 @@ cp configs/mono_gateway-dk.seed .config
 # on every machine. Use `nix run` -- NOT `nix develop -c` / `nix-shell --run`,
 # which hang on the env's shellHook exec. git, publish and signing stay on the
 # host (their tools are not in the flake's package set).
-# mono-update-check is force-rebuilt (clean+compile) so /etc/mono_release carries
-# THIS release tag; otherwise every image ships the stale identity of the
-# package's first build and auto-mode devices re-flash forever.
+# the mono-update package is force-rebuilt (clean+compile) so /etc/mono_release
+# carries THIS release tag; otherwise every image ships the stale identity of
+# the package's first build and auto-mode devices re-flash forever.
 nix run . -- -c 'set -e
 	make defconfig
-	make package/mono/mono-update-check/clean package/mono/mono-update-check/compile
+	make package/mono/updater/clean package/mono/updater/compile
 	make -j"$(nproc)" world'
 
 # Verify the image actually baked THIS release's identity. The OTA client and
