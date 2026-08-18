@@ -40,14 +40,24 @@ CONFIG_PACKAGE_kmod-i2c-core=y
 CONFIG_PACKAGE_kmod-regmap-core=y
 CONFIG_PACKAGE_kmod-regmap-i2c=y
 # CONFIG_PACKAGE_kmod-usb-storage-uas is not set
-CONFIG_PACKAGE_layerscape-rcw=y
 # CONFIG_PACKAGE_libbpf is not set
 # CONFIG_PACKAGE_libelf is not set
 CONFIG_PACKAGE_tcpdump=y
 CONFIG_PACKAGE_i2csfp=y
 CONFIG_PACKAGE_i2c-tools=y
-CONFIG_PACKAGE_trusted-firmware-a-ls1046a-rdb-sdboot=y
-CONFIG_PACKAGE_u-boot-fsl_ls1046a-rdb-sdboot=y
+# telnet CLIENT (BSD telnet, /usr/bin/telnet) for network debugging — probing a TCP
+# port (`telnet host 80`) or talking to a device that only speaks telnet. CLIENT ONLY;
+# no telnetd server is added (SSH/dropbear stays the sole inbound path). The busybox
+# telnet applet was the lighter option but this build's .config carries no effective
+# CONFIG_BUSYBOX_CONFIG_* applet symbols to override, so the standalone pkg is the
+# defconfig-stable route. New binary -> harvest its SELinux AVCs into policy later.
+CONFIG_PACKAGE_telnet-bsd=y
+# Boot firmware (RCW + TF-A BL2/BL31 + U-Boot) is NOT built here — it is owned by a
+# separate Yocto repo and lives in the eMMC 4 KiB–32 MiB region, which the image
+# generator (gen_mono_emmc_img.sh) explicitly leaves untouched. This OpenWrt image
+# ships only GPT + boot (ext4: extlinux + Image.gz + dtb) + rootfs. The stock
+# ls1046a-rdb TF-A / U-Boot / RCW packages built into staging but were consumed by
+# nothing in the mono recipe (and the board is not an RDB) — removed as dead weight.
 # CONFIG_PACKAGE_umdns is not set
 # CONFIG_TARGET_IMAGES_GZIP is not set
 CONFIG_TARGET_ROOTFS_PARTSIZE=256
