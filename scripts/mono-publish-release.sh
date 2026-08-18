@@ -50,7 +50,12 @@ json_tag=$(sed -n 's/.*"tag": *"\([^"]*\)".*/\1/p' releases/latest.json | head -
 
 if [ -n "${MONO_PUBLISH_DEST:-}" ]; then
 	echo "mono-publish: publishing to $MONO_PUBLISH_DEST"
-	rsync -a "$OUT" releases/latest.json releases/latest.json.sig "$MONO_PUBLISH_DEST/"
+	# Two-phase publish so the live manifest never points at images that have
+	# not landed yet: rsync the release dir to COMPLETION first, then flip
+	# latest.json(+.sig) in a separate step. rsync renames each file into
+	# place atomically, so the manifest swap itself is atomic too.
+	rsync -a "$OUT" "$MONO_PUBLISH_DEST/"
+	rsync -a releases/latest.json releases/latest.json.sig "$MONO_PUBLISH_DEST/"
 else
 	echo "mono-publish: MONO_PUBLISH_DEST unset, nothing rsynced" >&2
 fi
