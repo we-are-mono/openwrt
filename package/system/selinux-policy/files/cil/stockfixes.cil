@@ -91,6 +91,7 @@
     (call .sys.modulerequest_system (subj))      ;; device-module autoload
     (call .conf.read_file_files (subj))          ;; generic /etc config reads
     (call .conf.list_file_dirs (subj))           ;; +read/open conf.file dirs (surfaced by openvpn-up hotplug)
+    (call .board.read_file_files (subj))         ;; getattr /etc/board.json — early-boot hotplug reads board identity
     (call .runtmp.manage_file_dirs (subj))       ;; manage generic /tmp/run
     (call .runtmp.manage_file_files (subj)))
 
@@ -480,3 +481,26 @@
 (in wpa.server
     (call .openssl.conftmp.search_file_dirs (subj))
     (call .openssl.conftmp.read_file_files (subj)))
+
+;; ===========================================================================
+;; www.server (uhttpd) — SIGKILL its LuCI CGI child on timeout/disconnect
+;; ===========================================================================
+;; Denial: process luci.subj { sigkill }. uhttpd spawns the LuCI CGI/RPC handler
+;; as its own child, which runs confined as luci.subj (the cgiscript transition).
+;; On a request timeout or client disconnect uhttpd SIGKILLs that child. Same
+;; idiom netifd uses to reap ppp.server/wpa.server (.<target>.sigkill_subj_processes).
+
+(in www.server
+    (call .luci.sigkill_subj_processes (subj)))
+
+;; ===========================================================================
+;; wget — read a generic /etc config (running confined via the rpcd transition)
+;; ===========================================================================
+;; Denial: file conf.file { read open }. When rpcd execs wget for LuCI status it
+;; runs confined as wget.subj (rpc.server's .wget.subj_type_transition, above) and
+;; opens+reads a generic /etc config (conf.file). `open` is present, so this is a
+;; genuine open (not an inherited-fd leak like the wget dontaudit section above) —
+;; grant the generic conf read, the same interface jshn/htop/hotplug already use.
+
+(in wget
+    (call .conf.read_file_files (subj)))

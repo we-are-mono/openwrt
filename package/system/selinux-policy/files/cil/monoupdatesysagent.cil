@@ -72,6 +72,11 @@
   ;; (uci.subj) can manage it. monoupdate only READS it -> generic conf read (no private label).
   (call .conf.read_file_files (subj))
 
+  ;; harvested on production (permissive): a subprocess (curl/usign/uci/shell)
+  ;; traverses a /root home-config dir to reach a dotfile — search only (dir
+  ;; traversal). Exact path not captured in the deduped harvest; low-risk grant.
+  (call .sys.home.conf.search_file_dirs (subj))
+
   (block conf
 
     ;; daemon-owned (NOT UCI): keep private so only mono_update_t reads them
