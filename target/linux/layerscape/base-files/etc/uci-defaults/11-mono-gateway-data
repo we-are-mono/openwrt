@@ -1,0 +1,52 @@
+#!/bin/sh
+# First-boot setup of the persistent /data partition (p5) for the Mono Gateway.
+# The A/B eMMC layout (see mono_gpt.py) reserves p5 for user data that MUST
+# survive sysupgrade - which rewrites only bootA (p1) and rootA (p2), never p5.
+# The flashed image seeds only bootA+rootA, so p5 is created here: format it
+# once, register it in fstab (block-mount remounts it every boot), and mount it.
+# uci-defaults self-delete on exit 0; this exits non-zero to retry next boot
+# until /data is mounted, and is idempotent.
+. /lib/functions.sh
+
+case "$(board_name)" in
+mono,gateway-dk) ;;
+*) exit 0 ;;
+esac
+
+DATA_DEV=/dev/mmcblk0p5
+[ -b "$DATA_DEV" ] || {
+	logger -t mono-firstboot "no $DATA_DEV yet, deferring /data setup"
+	exit 1
+}
+
+mkdir -p /data
+
+# Format once. Detect "already formatted" by trying to mount it - not with
+# block/blkid, so this never depends on an optional tool. lazy_*_init keeps the
+# one-time mkfs on the ~28 GiB partition from stretching first boot.
+if ! mount -t ext4 -o rw,noatime "$DATA_DEV" /data 2>/dev/null; then
+	logger -t mono-firstboot "formatting $DATA_DEV as ext4 (label data)"
+	if ! mkfs.ext4 -q -F -L data -E lazy_itable_init=1,lazy_journal_init=1 "$DATA_DEV" >/dev/null 2>&1; then
+		logger -t mono-firstboot "mkfs on $DATA_DEV failed, will retry"
+		exit 1
+	fi
+	mount -t ext4 -o rw,noatime "$DATA_DEV" /data 2>/dev/null || {
+		logger -t mono-firstboot "mount of $DATA_DEV failed, will retry"
+		exit 1
+	}
+fi
+
+# Register the mount by fs label (named section => idempotent); block-mount
+# remounts it on every subsequent boot.
+uci -q batch <<EOF
+set fstab.mono_data=mount
+set fstab.mono_data.target=/data
+set fstab.mono_data.label=data
+set fstab.mono_data.fstype=ext4
+set fstab.mono_data.options=rw,noatime
+set fstab.mono_data.enabled=1
+commit fstab
+EOF
+
+logger -t mono-firstboot "/data ready on $DATA_DEV"
+exit 0

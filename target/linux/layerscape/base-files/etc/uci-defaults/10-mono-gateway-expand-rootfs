@@ -1,9 +1,10 @@
 #!/bin/sh
 # First-boot disk fixups for the Mono Gateway. Two jobs:
-#  1. Grow the rootfs to fill its partition. The image ships a small ext4
-#     inside a partition already sized to the full eMMC (the on-device GPT
-#     is never rewritten by an upgrade, and its entry array sits in the
-#     first 4 KiB clear of the boot firmware; see mono_gpt.py).
+#  1. Grow rootA (p2) to fill its 1 GiB partition. The image ships a small
+#     ext4 inside the (now fixed-size) rootfs slot; the on-device GPT is never
+#     rewritten by a normal upgrade, and its entry array sits in the first
+#     4 KiB clear of the boot firmware (see mono_gpt.py). The persistent /data
+#     partition (p5) is set up separately by 11-mono-gateway-data.
 #  2. Write the backup GPT to the end of the device from the blob shipped in
 #     the boot partition, so the on-disk table is complete and partition
 #     tools do not "repair" it.

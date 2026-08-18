@@ -3,9 +3,18 @@
 # array) so the boot-firmware region (4 KiB-32 MiB, owned by a separate
 # update tool) stays clear; ptgen cannot emit a small array, hence this.
 #
+# A/B layout (5 partitions, all within the 8-entry array):
+#   p1 bootA   @ 32 MiB            , boot_mb   ext4: /boot/extlinux + Image.gz + dtb
+#   p2 rootA   @ 32+boot_mb MiB    , root_mb   slot-A rootfs (== the pre-A/B rootfs start)
+#   p3 bootB   @ after rootA       , boot_mb   slot-B boot (empty until an A/B update)
+#   p4 rootB   @ after bootB       , root_mb   slot-B rootfs (empty until an A/B update)
+#   p5 data    @ after rootB       , fill      persistent /data; survives sysupgrade
+# Slot A keeps the pre-A/B offsets so an existing unit's rootfs stays put and the
+# migration only shrinks p2 and adds p3-p5. root_mb is now the PER-SLOT rootfs size.
+#
 # Two modes:
-#   primary  -> protective MBR + header (LBA1) + array (LBA2-3), for the
-#               head of the flashable image.
+#   primary  -> protective MBR + header (LBA1) + array (LBA2-3), for the head
+#               of the flashable image.
 #   backup   -> array + header tail (33 sectors) written at LBA N-33 of the
 #               real device on first boot; makes the on-disk table complete
 #               so partition tools do not see a half-corrupt GPT and try to
@@ -16,29 +25,36 @@ def guid(s): return uuid.UUID(s).bytes_le
 
 LINUX_FS  = guid("0FC63DAF-8483-4772-8E79-3D69D8477DE4")
 DISK_GUID = guid("6D6F6E6F-1046-4000-8000-4D6F6E6F0000")
-PART_GUID = [guid("6D6F6E6F-1046-4000-8000-4D6F6E6F0001"),
-             guid("6D6F6E6F-1046-4000-8000-4D6F6E6F0002")]
+# One stable partition GUID per partition p1..p5 (…0001 … …0005).
+PART_GUID = [guid("6D6F6E6F-1046-4000-8000-4D6F6E6F000%d" % n) for n in range(1, 6)]
 SEC, ENTRIES, ENTRY_SZ = 512, 8, 128
+MiB = 2048   # 512-byte sectors per MiB
 
-def build(disk_sectors, boot_mb, root_part_mb):
-    boot_first = 32 * 2048
-    boot_last  = boot_first + boot_mb * 2048 - 1
-    root_first = boot_last + 1
-    root_last  = root_first + root_part_mb * 2048 - 1
-    if root_last > disk_sectors - 34:
-        sys.exit("mono_gpt: rootfs partition (%d MiB) exceeds device (%d sectors)"
-                 % (root_part_mb, disk_sectors))
+def build(disk_sectors, boot_mb, root_mb):
+    first_usable = 32 * MiB               # keep the 4 KiB-32 MiB firmware region out of range
+    last_usable  = disk_sectors - 34      # 33-sector backup GPT tail lives above this
+
+    # (label, size in MiB); size 0 means "fill to last_usable" (the data partition).
+    specs = [("bootA", boot_mb), ("rootA", root_mb),
+             ("bootB", boot_mb), ("rootB", root_mb), ("data", 0)]
+    parts, cur = [], first_usable
+    for name, mb in specs:
+        first = cur
+        last  = (first + mb * MiB - 1) if mb else last_usable
+        if first > last or last > last_usable:
+            sys.exit("mono_gpt: layout exceeds device (%d sectors): %s wants %d-%d, "
+                     "last_usable %d" % (disk_sectors, name, first, last, last_usable))
+        parts.append((name, first, last))
+        cur = last + 1
 
     def entry(pg, first, last, name):
         return (LINUX_FS + pg + struct.pack("<QQQ", first, last, 0)
                 + name.encode("utf-16-le").ljust(72, b"\0"))
-    array = (entry(PART_GUID[0], boot_first, boot_last, "boot")
-             + entry(PART_GUID[1], root_first, root_last, "rootfs"))
+    array = b"".join(entry(PART_GUID[i], f, l, n)
+                     for i, (n, f, l) in enumerate(parts))
     array = array.ljust(ENTRIES * ENTRY_SZ, b"\0")
     arr_crc = zlib.crc32(array) & 0xFFFFFFFF
 
-    first_usable = boot_first
-    last_usable  = disk_sectors - 34
     backup_arr_lba = disk_sectors - 33
 
     def header(my_lba, alt_lba, entry_lba):

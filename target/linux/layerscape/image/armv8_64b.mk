@@ -417,9 +417,13 @@ define Build/mono-bootfs
 	# a kernel `enforcing=` arg here is overridden at policy load, so it's not used.
 	printf 'label OpenWrt\n\tkernel /boot/Image.gz\n\tfdt /boot/%s.dtb\n\tappend root=/dev/mmcblk0p2 rootwait console=ttyS0,115200 earlycon=uart8250,mmio,0x21c0500\n' \
 		"$(DEVICE_DTS)" > $@.bootdir/boot/extlinux/extlinux.conf
-	# Backup GPT (33-sector tail) travels in the boot partition; first boot
-	# dd's it to the device end so the on-disk table is complete.
+	# GPT blobs travel in the boot partition: the 33-sector backup tail (first
+	# boot dd's it to the device end so the on-disk table is complete) and the
+	# 4 KiB primary table (the sysupgrade migration path dd's it to repartition
+	# an old-layout unit to the A/B + /data GPT - platform_do_upgrade_mono).
 	python3 mono_gpt.py backup $@.bootdir/boot/backup-gpt.bin \
+		$(MONO_EMMC_SECTORS) $(MONO_BOOTFS_SIZE) $(MONO_ROOTFS_PART)
+	python3 mono_gpt.py primary $@.bootdir/boot/primary-gpt.bin \
 		$(MONO_EMMC_SECTORS) $(MONO_BOOTFS_SIZE) $(MONO_ROOTFS_PART)
 	truncate -s $(MONO_BOOTFS_SIZE)M $@.bootfs
 	$(STAGING_DIR_HOST)/bin/mkfs.ext4 -F -L boot -d $@.bootdir $@.bootfs
@@ -466,14 +470,17 @@ define Device/mono_gateway-dk
 	block-mount kmod-usb-storage-uas kmod-fs-exfat kmod-fs-ntfs3 \
 	kmod-fs-vfat smartmontools usbutils pciutils i2c-tools \
 	tmux vim-full curl rsync jq less bind-dig openssh-sftp-server \
-	usign ca-bundle file ip-full resize2fs mono-update luci-app-mono-update \
+	usign ca-bundle file ip-full resize2fs e2fsprogs mono-update luci-app-mono-update \
 	cmmqos \
 	policycoreutils-setfiles policycoreutils-sestatus
   KERNEL_NAME := Image
   KERNEL := kernel-bin | gzip
   FILESYSTEMS := ext4
+  # A/B + persistent-data eMMC layout (see mono_gpt.py): two 1 GiB rootfs slots
+  # (rootA=p2 keeps the pre-A/B start sector), two 64 MiB boot slots, and /data
+  # (p5) filling the rest (~27.5 GiB). MONO_ROOTFS_PART is the PER-SLOT size.
   MONO_BOOTFS_SIZE := 64
-  MONO_ROOTFS_PART := 30208
+  MONO_ROOTFS_PART := 1024
   MONO_EMMC_SECTORS := 62160896
   # Keep the -sdboot alias: units flashed before 02_sysinfo_fixup stopped
   # appending it still report mono,gateway-dk-sdboot at runtime, and sysupgrade

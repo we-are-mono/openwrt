@@ -1,0 +1,62 @@
+#!/bin/sh
+# One-time migration to the A/B + persistent-/data eMMC layout, run on the
+# FIRST boot of the new image. A unit flashed before the A/B layout boots here
+# on the OLD 2-partition GPT (p2 = the whole eMMC, no /data); sysupgrade never
+# rewrites the GPT, and it runs the OLD system's platform.sh anyway - so the
+# migration happens here instead, from the running new image.
+#
+# p1 (bootA) and p2's start (rootA @ 196608) are identical in both layouts, so
+# the running rootfs on p2 is undisturbed: only the GPT sectors change (the
+# primary at 0-3 and the 33-sector backup tail). The new table comes from the
+# blobs shipped in the boot partition. After the swap we reboot so the kernel
+# re-reads the table (it will not re-read while p2 is mounted); p5 then appears
+# and 11-mono-gateway-data formats and mounts /data.
+#
+# Runs before 10-expand / 11-data (numeric order) and reboots before them.
+# No-op once on the A/B layout (p5 present); a marker guards against a reboot
+# loop should p5 ever fail to appear. uci-defaults self-delete on exit 0.
+. /lib/functions.sh
+
+case "$(board_name)" in
+mono,gateway-dk) ;;
+*) exit 0 ;;
+esac
+
+# Already migrated (p5 present), or migration already attempted - do nothing.
+[ -e /sys/class/block/mmcblk0p5 ] && exit 0
+[ -f /etc/mono-ab-migrated ] && exit 0
+
+disk=/dev/mmcblk0
+sectors="$(cat /sys/block/mmcblk0/size 2>/dev/null)"
+[ -n "$sectors" ] || { logger -t mono-migrate "no disk size, deferring"; exit 1; }
+
+mkdir -p /tmp/mono-bootp
+mount -t ext4 -o ro /dev/mmcblk0p1 /tmp/mono-bootp 2>/dev/null || {
+	logger -t mono-migrate "cannot mount boot partition, deferring"
+	exit 1
+}
+P=/tmp/mono-bootp/boot/primary-gpt.bin
+B=/tmp/mono-bootp/boot/backup-gpt.bin
+if [ ! -f "$P" ] || [ ! -f "$B" ]; then
+	umount /tmp/mono-bootp 2>/dev/null
+	logger -t mono-migrate "GPT blobs missing in boot partition, cannot migrate"
+	exit 1
+fi
+
+logger -t mono-migrate "migrating eMMC to the A/B + /data GPT"
+# Commit the new table: primary (sectors 0-3) first, then the 33-sector backup
+# tail. Only the GPT changes; the mounted rootfs on p2 is untouched.
+if dd if="$P" of="$disk" bs=512 conv=fsync 2>/dev/null && \
+   dd if="$B" of="$disk" bs=512 seek=$(( sectors - 33 )) conv=fsync 2>/dev/null; then
+	sync
+	: > /etc/mono-ab-migrated
+	sync
+	umount /tmp/mono-bootp 2>/dev/null
+	logger -t mono-migrate "GPT migrated; rebooting to activate the new table"
+	reboot -f
+	exit 0
+fi
+
+umount /tmp/mono-bootp 2>/dev/null
+logger -t mono-migrate "GPT write failed, will retry next boot"
+exit 1

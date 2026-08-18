@@ -209,7 +209,10 @@ platform_do_upgrade_mono() {
 	mono_dd_member "$tar_file" "$board_dir" root "$rootpart" || {
 		echo "Rootfs write to $rootpart failed"; return 1; }
 	# rootfs ships at 384M; the uci-defaults script in it re-expands
-	# to the full partition on first boot
+	# to the full partition on first boot. An old-layout unit (2-partition GPT,
+	# no /data) is migrated to the A/B + /data layout on first boot by the
+	# 05-mono-gateway-migrate uci-default, not here - sysupgrade only ever
+	# rewrites bootA (p1) and rootA (p2), never the GPT or /data (p5).
 }
 
 platform_copy_config_mono() {
