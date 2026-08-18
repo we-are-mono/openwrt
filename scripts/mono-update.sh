@@ -146,6 +146,13 @@ mkdir -p "$OUT"
 cp "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-ext4-emmc.img.gz \
    "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-ext4-sysupgrade*.bin \
    "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*.manifest "$OUT/"
+
+# Per-release kmod feed: kernel modules are vermagic-locked to this build, so
+# devices cannot get them from the official OpenWrt repo. The device's
+# 92-mono-feeds points apk at <url>/<tag>/kmods/. luci + packages come from the
+# official feed; we ship only what it cannot - the signed target/kmod packages.
+mkdir -p "$OUT/kmods"
+cp "$BINDIR"/packages/packages.adb "$BINDIR"/packages/*.apk "$OUT/kmods/"
 git format-patch --quiet -o "$OUT/patches" "$LATEST..$BRANCH"
 (cd "$OUT" && sha256sum *.img.gz *.bin > sha256sums)
 

@@ -1,0 +1,32 @@
+#!/bin/sh
+# After a sysupgrade wipes the rootfs, reinstall the packages the user had added.
+# mono-update snapshots the list pre-flash into /etc/mono-update.reinstall (kept
+# across the flash). This fires on interface-up, so the feeds are reachable, and
+# removes the list once done - later events are then no-ops.
+[ "$ACTION" = ifup ] || exit 0
+[ -s /etc/mono-update.reinstall ] || exit 0
+mkdir /tmp/mono-reinstall.lock 2>/dev/null || exit 0   # a run is already in flight
+
+# Refresh the indexes. Best-effort: a per-release feed can briefly 404 (or be
+# unpublished on a dev build), which makes apk exit non-zero even though the
+# official feeds refreshed - so never gate the reinstall on apk update's status.
+apk update >/dev/null 2>&1
+
+succ=0; fail=0
+for p in $(cat /etc/mono-update.reinstall); do
+	if apk add "$p" >/dev/null 2>&1; then
+		succ=$((succ + 1)); logger -t mono-reinstall "reinstalled $p"
+	else
+		fail=$((fail + 1)); logger -t mono-reinstall "could not reinstall $p"
+	fi
+done
+
+# Drop the list once the network was clearly reachable (something installed, or
+# nothing failed); keep it only when EVERYTHING failed (WAN not up yet) so a
+# later ifup retries.
+if [ "$fail" = 0 ] || [ "$succ" -gt 0 ]; then
+	rm -f /etc/mono-update.reinstall
+	sync
+fi
+rmdir /tmp/mono-reinstall.lock 2>/dev/null
+exit 0

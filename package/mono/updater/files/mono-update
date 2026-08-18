@@ -204,6 +204,16 @@ do_install() {
 	printf 'floor=%s\n' "$TAG" > "$FLOORFILE"
 	sync
 
+	# Snapshot the packages the user added on top of the factory set (world -
+	# baseline, by bare name), so 95-mono-reinstall can put them back from the
+	# feeds after the flash wipes the rootfs. Best-effort - never block the flash.
+	if [ -f /etc/mono-update.baseline ]; then
+		sed 's/[=<>].*//' /etc/mono-update.baseline 2>/dev/null | sort -u > "$TMP/base_names"
+		sed 's/[=<>].*//' /etc/apk/world      2>/dev/null | sort -u > "$TMP/cur_names"
+		grep -vxF -f "$TMP/base_names" "$TMP/cur_names" 2>/dev/null > /etc/mono-update.reinstall
+		sync
+	fi
+
 	say "verified $TAG - applying via sysupgrade, the device will reboot now"
 	exec sysupgrade "$TMP/image.bin"
 }

@@ -1,2 +1,6 @@
 # Preserve the update anti-rollback floor across sysupgrade.
 /etc/mono-update.state
+# Preserve the factory package baseline and the pre-flash reinstall list, so the
+# user's added packages can be put back after a sysupgrade (95-mono-reinstall).
+/etc/mono-update.baseline
+/etc/mono-update.reinstall

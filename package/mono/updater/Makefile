@@ -67,6 +67,13 @@ define Package/mono-update/install
 	$(INSTALL_BIN) ./files/mono-update $(1)/usr/sbin/
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/90-mono-update-cron $(1)/etc/uci-defaults/
+	# 92: point apk at the per-release mono kmod feed. 93: snapshot the factory
+	# package set as the reinstall baseline (both first-boot uci-defaults).
+	$(INSTALL_BIN) ./files/92-mono-feeds $(1)/etc/uci-defaults/
+	$(INSTALL_BIN) ./files/93-mono-baseline $(1)/etc/uci-defaults/
+	# 95: reinstall the user's added packages after a sysupgrade, on network-up.
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
+	$(INSTALL_BIN) ./files/95-mono-reinstall $(1)/etc/hotplug.d/iface/
 	# Trusted release signing keys (public halves): the primary key used
 	# nightly, plus an offline rotation key so a lost primary never strands
 	# the fleet. Private halves never leave the release host / offline media.

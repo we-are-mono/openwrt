@@ -15,8 +15,12 @@ CONFIG_TARGET_layerscape=y
 CONFIG_TARGET_layerscape_armv8_64b=y
 CONFIG_TARGET_layerscape_armv8_64b_DEVICE_mono_gateway-dk=y
 CONFIG_DEVEL=y
-# CONFIG_FEED_luci is not set
-# CONFIG_FEED_packages is not set
+# Enable the official OpenWrt luci + packages apk feeds on the device (repo
+# lines only - does NOT bulk-build the feeds). Lets users `apk add` the ~9000
+# arch-independent + arch-dependent packages the stock 25.12.5 repo serves;
+# kmods still come from the mono per-release feed (vermagic-locked).
+CONFIG_FEED_luci=y
+CONFIG_FEED_packages=y
 CONFIG_KERNEL_GIT_CLONE_URI="https://github.com/nxp-qoriq/linux"
 CONFIG_KERNEL_GIT_LOCAL_REPOSITORY=""
 CONFIG_KERNEL_GIT_MIRROR_HASH=""
