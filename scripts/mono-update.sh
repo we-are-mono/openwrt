@@ -38,6 +38,12 @@ done
 	exit 1
 }
 
+# The downstream ASK patch copies (fmc/fmlib/libnfnetlink) must match their
+# pinned shas - and the ASK masters when a checkout is on disk - so a re-synced
+# but unpinned (or hand-edited) patch can never ship silently. Fail before we
+# tag or build. See scripts/check-ask-patch-sync.sh.
+scripts/check-ask-patch-sync.sh
+
 git fetch --quiet origin 'refs/tags/v*:refs/tags/v*'
 
 # Deliberately tracks only the current minor series (v25.12.x patch

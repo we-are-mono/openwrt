@@ -1,0 +1,20 @@
+# ASK downstream-patch sync manifest — pinned blessed shas of the three
+# downstream COPIES of ASK patch masters carried in this tree.
+#
+# fmc + fmlib are fetched from nxp-qoriq upstream and libnfnetlink is stock
+# OpenWrt, so the ASK extensions reach those sources only through these copies.
+# Their masters live in the ASK repo:
+#   package/ask/fmc/patches/100-mono-ask-extensions.patch
+#       <- ASK patches/fmc/01-mono-ask-extensions.patch
+#   package/ask/fmlib/patches/100-mono-ask-extensions.patch
+#       <- ASK patches/fmlib/01-mono-ask-extensions.patch
+#   package/libs/libnfnetlink/patches/900-nxp-ask-nonblocking-heap-buffer.patch
+#       <- ASK patches/libnfnetlink/<PKG_VERSION>/01-nxp-ask-nonblocking-heap-buffer.patch
+#
+# When the ASK masters change, re-sync the copies AND update these shas in the
+# SAME commit (lockstep). scripts/check-ask-patch-sync.sh enforces this and
+# mono-update.sh gates every release on it.
+#   verify: grep -vE '^[[:space:]]*(#|$)' package/ask/ask-patch-sync.sha256 | sha256sum -c -
+9da0c6ecbc6c978d3cbae3c5faa83b00db7ac89903807044191a118e0e8ad63b  package/ask/fmc/patches/100-mono-ask-extensions.patch
+000a60bcf3e4293cdcc3d59dbd37ff06020d65bfae11e7bf454e3263bb3fe02c  package/ask/fmlib/patches/100-mono-ask-extensions.patch
+332386759d63e187d30c9da3d3723803fd10b278a1e38eb4f83223eb7fd5d7a9  package/libs/libnfnetlink/patches/900-nxp-ask-nonblocking-heap-buffer.patch
