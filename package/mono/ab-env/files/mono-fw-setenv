@@ -1,0 +1,24 @@
+#!/bin/sh
+# mono-fw-setenv - apply a U-Boot env change to BOTH firmware env media.
+#
+# The Gateway-DK has a firmware-boot DIP switch (QSPI/NOR vs eMMC). Each medium
+# carries its own single-copy U-Boot env:
+#   QSPI = mtd3             -> /etc/fw_env.config  (also what plain fw_printenv reads)
+#   eMMC = mmcblk0 @0x300000 -> /etc/fw_env.d/emmc
+# U-Boot reads whichever the DIP switch selects, so to keep the A/B slot +
+# bootcount correct either way we write BOTH. Both regions are always writable
+# on this board (mtd3 NOR erase+write; the eMMC env slot sits below GPT p1,
+# unclaimed by any partition), so both should normally succeed - a failure of
+# either is a real signal. Strict: exits non-zero unless BOTH writes succeed.
+#
+# All args pass straight through to fw_setenv, e.g.
+#   mono-fw-setenv slot b
+#   mono-fw-setenv bootcount 0
+#   mono-fw-setenv -s /tmp/ab.env      (batch: "key value" lines)
+QSPI_CFG=/etc/fw_env.config
+EMMC_CFG=/etc/fw_env.d/emmc
+
+rc=0
+fw_setenv -c "$QSPI_CFG" "$@" || { echo "mono-fw-setenv: QSPI (mtd3) env write FAILED" >&2; rc=1; }
+fw_setenv -c "$EMMC_CFG" "$@" || { echo "mono-fw-setenv: eMMC env write FAILED" >&2; rc=1; }
+exit "$rc"

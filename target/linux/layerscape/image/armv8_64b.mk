@@ -415,7 +415,12 @@ define Build/mono-bootfs
 	$(CP) $(DEVICE_DTS_DIR)/$(DEVICE_DTS).dtb $@.bootdir/boot/
 	# SELinux mode is set by /etc/selinux/config (SELINUX=permissive during bring-up);
 	# a kernel `enforcing=` arg here is overridden at policy load, so it's not used.
-	printf 'label OpenWrt\n\tkernel /boot/Image.gz\n\tfdt /boot/%s.dtb\n\tappend root=/dev/mmcblk0p2 rootwait console=ttyS0,115200 earlycon=uart8250,mmio,0x21c0500\n' \
+	# root= is per-slot: U-Boot's sysboot expands $${rootpart} (set by bootcmd's
+	# set_slot_a/b) in the append line (pxe_utils cli_simple_process_macros), so
+	# ONE image boots either A/B slot. $$ keeps make from eating the ${..} - it
+	# must reach the file literally for U-Boot to expand at boot. default+timeout
+	# make the single label auto-boot even if a second entry is ever added.
+	printf 'default OpenWrt\ntimeout 10\nlabel OpenWrt\n\tkernel /boot/Image.gz\n\tfdt /boot/%s.dtb\n\tappend root=/dev/mmcblk0p$${rootpart} rootwait console=ttyS0,115200 earlycon=uart8250,mmio,0x21c0500 panic=10\n' \
 		"$(DEVICE_DTS)" > $@.bootdir/boot/extlinux/extlinux.conf
 	# GPT blobs travel in the boot partition: the 33-sector backup tail (first
 	# boot dd's it to the device end so the on-disk table is complete) and the
@@ -470,7 +475,7 @@ define Device/mono_gateway-dk
 	block-mount kmod-usb-storage-uas kmod-fs-exfat kmod-fs-ntfs3 \
 	kmod-fs-vfat smartmontools usbutils pciutils i2c-tools \
 	tmux vim-full curl rsync jq less bind-dig openssh-sftp-server \
-	usign ca-bundle file ip-full resize2fs e2fsprogs mono-update luci-app-mono-update \
+	usign ca-bundle file ip-full resize2fs e2fsprogs uboot-envtools mono-ab-env mono-update luci-app-mono-update \
 	cmmqos \
 	policycoreutils-setfiles policycoreutils-sestatus
   KERNEL_NAME := Image

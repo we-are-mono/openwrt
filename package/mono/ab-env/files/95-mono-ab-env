@@ -1,0 +1,64 @@
+#!/bin/sh
+# 95-mono-ab-env - install/refresh the static A/B U-Boot env.
+#
+# Sets the boot machinery every fielded unit needs so U-Boot can boot either
+# slot and auto-roll-back a bad update. Written to BOTH env media via
+# mono-fw-setenv (QSPI mtd3 + eMMC) so it holds regardless of the firmware-boot
+# DIP switch. Ships in every image; a uci-default so it reliably runs on the
+# first boot after sysupgrade (procd skips a classic init boot() there).
+#
+# VERSIONED: the env carries mono_ab_env_ver. The installer skips only when the
+# stored version is >= the version it ships; otherwise it (re)writes the static
+# lines and stamps the new version. So a future release that changes the env
+# (e.g. a fixed altbootcmd, a new var) just bumps MONO_AB_ENV_VER and every board
+# picks it up on that release - a plain presence check could never refresh it.
+#
+# It writes only the STATIC lines + stamps the version, and sets `slot` only when
+# it is unset (a fresh install), so a refresh never yanks a board off its running
+# slot. The dynamic trial vars (upgrade_available, bootcount) are never touched
+# here: platform_do_upgrade_mono arms them, mark-good disarms them.
+#
+# NOTE: factory units should also carry these in the U-Boot firmware env
+# (meta-mono environment.txt) so a brand-new unit boots A/B before OpenWrt's
+# first boot; this hook is the delivery path for OTA-updated existing units.
+MONO_AB_ENV_VER=1
+
+# Already at this version (or newer)? Nothing to do. An unset marker (r8 unit, or
+# a board migrated by a pre-versioning r9) fails the -n test and falls through to
+# install; a non-numeric value makes the -ge test error (silenced) and also falls
+# through - both erring toward (re)install, never a wrong skip.
+cur=$(fw_printenv -n mono_ab_env_ver 2>/dev/null)
+[ -n "$cur" ] && [ "$cur" -ge "$MONO_AB_ENV_VER" ] 2>/dev/null && exit 0
+
+# slot is RUNTIME state: preserve it on a refresh, derive it only on a fresh
+# install (unset) from the running kernel's root= (p4 => slot B, else A).
+slot=$(fw_printenv -n slot 2>/dev/null)
+if [ -z "$slot" ]; then
+	slot=a
+	for arg in $(cat /proc/cmdline 2>/dev/null); do
+		case "$arg" in root=/dev/mmcblk*p4) slot=b ;; esac
+	done
+fi
+
+env_batch="/tmp/mono-ab-install.env"
+cat > "$env_batch" <<EOF
+slot $slot
+set_slot_a setenv bootpart 1; setenv rootpart 2
+set_slot_b setenv bootpart 3; setenv rootpart 4
+scriptaddr 0x80200000
+bootcmd run set_slot_\${slot}; sysboot mmc 0:\${bootpart} any \${scriptaddr} /boot/extlinux/extlinux.conf || run recovery
+bootlimit 3
+altbootcmd setenv upgrade_available 0; if test \${slot} = a; then setenv slot b; else setenv slot a; fi; setenv bootcount 0; saveenv; run bootcmd
+mono_ab_env_ver $MONO_AB_ENV_VER
+EOF
+
+if mono-fw-setenv -s "$env_batch"; then
+	rm -f "$env_batch"
+	logger -t mono-ab-env "installed A/B U-Boot env v$MONO_AB_ENV_VER (slot=$slot) to both media"
+	exit 0
+fi
+
+# Failed to write env: leave the uci-default in place to retry next boot.
+logger -t mono-ab-env "failed to install A/B U-Boot env; will retry next boot"
+rm -f "$env_batch"
+exit 1

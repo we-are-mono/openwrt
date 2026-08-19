@@ -5,12 +5,13 @@
 
 # platform_do_upgrade_mono streams each tar member to its partition through a fifo
 # (mono_dd_member) so tar's exit status is checked, not just dd's - busybox ash has
-# no PIPESTATUS. mkfifo is the ONLY tool that path needs beyond stage2's base ramfs
-# list (which already ships busybox, fwtool, gzip, hexdump, tar and dd). Left out,
-# mkfifo is "not found" in the upgrade ramdisk and EVERY flash silently fails at the
-# boot-partition write, then reverts to the old image on reboot.
-RAMFS_COPY_BIN="mkfifo"
-RAMFS_COPY_DATA=""
+# no PIPESTATUS. Beyond stage2's base ramfs (busybox, fwtool, gzip, hexdump, tar,
+# dd), the mono A/B flash needs: mkfifo (the fifo); fw_setenv + mono-fw-setenv to
+# flip the boot slot after writing the INACTIVE slot; and the env configs as DATA
+# so fw_setenv writes the same env U-Boot reads (mtd3 QSPI + eMMC copy). Left out,
+# the flash silently fails at the boot write, or cannot switch slot, and reverts.
+RAMFS_COPY_BIN="mkfifo fw_setenv fw_printenv mono-fw-setenv"
+RAMFS_COPY_DATA="/etc/fw_env.config /etc/fw_env.d/emmc"
 
 REQUIRE_IMAGE_METADATA=1
 
@@ -25,9 +26,15 @@ REQUIRE_IMAGE_METADATA=1
 # and overwrite it.
 # This helper is the single source of truth; the first-boot expand uci-default
 # sources this file to reuse it. Per-device: when non-DK Gateway boards are
-# added, MONO_ROOT_START_SECTOR must track their (32 + boot size) * 2048.
+# added, these sectors must track the mono_gpt.py layout.
+# A/B slots (mono_gpt.py): slot A = bootA p1 / rootA p2; slot B = bootB p3 / rootB
+# p4. Fixed GPT sectors: bootA@65536, rootA@196608, bootB@2293760, rootB@2424832
+# (data p5 fills the rest and is never touched by sysupgrade). HW-confirmed on the
+# DUT via /sys/class/block/mmcblk0pN/start.
 MONO_ROOT_START_SECTOR=196608
 MONO_BOOT_START_SECTOR=65536
+MONO_ROOTB_START_SECTOR=2424832
+MONO_BOOTB_START_SECTOR=2293760
 
 mono_cmdline_root() {
 	# Last root= wins, matching the kernel (a later root= overrides an earlier).
@@ -46,29 +53,48 @@ mono_part_matches() {
 
 # Echo the validated rootfs partition (e.g. /dev/mmcblk0p2), or fail (return 1).
 mono_gateway_root_part() {
-	local root part disk removable type
+	local root part disk idx sector removable type
 
 	grep -q "mono,gateway-dk" /sys/firmware/devicetree/base/compatible 2>/dev/null || {
 		echo "Not a Mono Gateway - refusing" >&2; return 1; }
 	root="$(mono_cmdline_root)" || { echo "Cannot determine root= from /proc/cmdline" >&2; return 1; }
+	# A/B: the running rootfs is slot A (p2 @196608) or slot B (p4 @2424832).
+	# The boot partitions (p1/p3) and /data (p5) are never a valid root=.
 	case "$root" in
-	/dev/mmcblk*p2) part="${root##*/}" ;;
+	/dev/mmcblk*p2) part="${root##*/}"; idx=2; sector="$MONO_ROOT_START_SECTOR" ;;
+	/dev/mmcblk*p4) part="${root##*/}"; idx=4; sector="$MONO_ROOTB_START_SECTOR" ;;
 	*) echo "Refusing unsupported root device: $root" >&2; return 1 ;;
 	esac
-	disk="${part%p2}"
+	disk="${part%p[0-9]}"
 	case "$disk" in
 	mmcblk | mmcblk*[!0-9]*) echo "Refusing malformed eMMC name: $disk" >&2; return 1 ;;
 	esac
 	[ -b "/dev/$part" ]       || { echo "$part is not a block device" >&2; return 1; }
 	[ -d "/sys/block/$disk" ] || { echo "eMMC $disk not present in sysfs" >&2; return 1; }
-	mono_part_matches "$part" 2 "$MONO_ROOT_START_SECTOR" || {
-		echo "Refusing: $part is not partition 2 at sector $MONO_ROOT_START_SECTOR" >&2; return 1; }
+	mono_part_matches "$part" "$idx" "$sector" || {
+		echo "Refusing: $part is not an A/B rootfs slot (want index $idx at sector $sector)" >&2; return 1; }
 	removable="$(cat "/sys/block/$disk/removable" 2>/dev/null)"
 	[ "$removable" = "0" ] || { echo "Refusing removable disk $disk (not soldered eMMC)" >&2; return 1; }
 	type="$(cat "/sys/block/$disk/device/type" 2>/dev/null)"
 	[ "$type" = "MMC" ] || { echo "Refusing non-eMMC disk $disk (type '$type')" >&2; return 1; }
 
 	echo "/dev/$part"
+}
+
+# A/B slot selection for sysupgrade: from the validated RUNNING rootfs, echo the
+# INACTIVE slot we must write, as:
+#   <new_slot> <bootpart> <rootpart> <boot_idx> <boot_sector> <root_idx> <root_sector>
+# (running A -> write B: p3/p4; running B -> write A: p1/p2). Fails if the running
+# slot cannot be validated.
+mono_gateway_inactive_slot() {
+	local run disk
+	run="$(mono_gateway_root_part)" || return 1
+	disk="${run%p[0-9]}"
+	case "$run" in
+	*p2) echo "b ${disk}p3 ${disk}p4 3 $MONO_BOOTB_START_SECTOR 4 $MONO_ROOTB_START_SECTOR" ;;
+	*p4) echo "a ${disk}p1 ${disk}p2 1 $MONO_BOOT_START_SECTOR 2 $MONO_ROOT_START_SECTOR" ;;
+	*) return 1 ;;
+	esac
 }
 
 platform_do_upgrade_sdboot() {
@@ -188,40 +214,66 @@ platform_do_upgrade_mono() {
 	local board_dir=$(tar tf $tar_file | grep -m 1 '^sysupgrade-.*/$')
 	board_dir=${board_dir%/}
 
-	local rootpart bootpart disk
-	rootpart="$(mono_gateway_root_part)" || {
-		echo "Refusing upgrade: could not validate the target eMMC"; return 1; }
-	disk="${rootpart%p2}"
-	bootpart="${disk}p1"		# boot is the sibling of the validated rootfs
-	# Boot is written FIRST and is the more catastrophic target, so validate it
-	# to the same standard as the rootfs (index 1 at the expected start sector).
-	[ -b "$bootpart" ] && mono_part_matches "${bootpart#/dev/}" 1 "$MONO_BOOT_START_SECTOR" || {
-		echo "Boot partition $bootpart failed validation"; return 1; }
+	# A/B: write the INACTIVE slot, leaving the running slot intact as the rollback
+	# target. mono_gateway_inactive_slot validates the running rootfs and returns
+	# the slot we must write.
+	local new_slot bootpart rootpart boot_idx boot_sector root_idx root_sector ab
+	ab="$(mono_gateway_inactive_slot)" || {
+		echo "Refusing upgrade: could not determine the inactive A/B slot (running rootfs did not validate)"; return 1; }
+	set -- $ab
+	new_slot="$1"; bootpart="$2"; rootpart="$3"
+	boot_idx="$4"; boot_sector="$5"; root_idx="$6"; root_sector="$7"
+	echo "A/B: writing INACTIVE slot ${new_slot} (boot ${bootpart}, root ${rootpart})"
 
-	# The "kernel" member is the complete boot partition image
-	# (Image.gz + dtb + extlinux.conf), so the device tree and boot
-	# config always match the kernel they were built with. The GPT
-	# and the raw boot firmware in the first 32 MiB are never touched.
+	# Validate BOTH targets (index + fixed GPT sector) before any write, so a wrong
+	# or blank GPT is refused rather than dd'd. Boot is written first and is the more
+	# catastrophic target.
+	[ -b "$bootpart" ] && mono_part_matches "${bootpart#/dev/}" "$boot_idx" "$boot_sector" || {
+		echo "Inactive boot $bootpart failed validation (want index $boot_idx at sector $boot_sector)"; return 1; }
+	[ -b "$rootpart" ] && mono_part_matches "${rootpart#/dev/}" "$root_idx" "$root_sector" || {
+		echo "Inactive root $rootpart failed validation (want index $root_idx at sector $root_sector)"; return 1; }
+
+	# The "kernel" member is the complete boot partition image (Image.gz + dtb +
+	# extlinux.conf), so dtb + boot config always match the kernel. The GPT, the raw
+	# boot firmware in the first 32 MiB, the ACTIVE slot, and /data (p5) are never
+	# touched.
 	echo "Writing boot partition to $bootpart..."
 	mono_dd_member "$tar_file" "$board_dir" kernel "$bootpart" || {
 		echo "Boot partition write to $bootpart failed"; return 1; }
 	echo "Writing rootfs to $rootpart..."
 	mono_dd_member "$tar_file" "$board_dir" root "$rootpart" || {
 		echo "Rootfs write to $rootpart failed"; return 1; }
-	# rootfs ships at 384M; the uci-defaults script in it re-expands
-	# to the full partition on first boot. An old-layout unit (2-partition GPT,
-	# no /data) is migrated to the A/B + /data layout on first boot by the
-	# 05-mono-gateway-migrate uci-default, not here - sysupgrade only ever
-	# rewrites bootA (p1) and rootA (p2), never the GPT or /data (p5).
+
+	# Both slots are on disk. Flip the boot pointer to the freshly written slot and
+	# ARM the rollback trial: bootcount=0 (fresh budget) + upgrade_available=1 (the
+	# CONFIG_BOOTCOUNT_ENV gate - U-Boot only counts/rolls-back while this is 1; the
+	# new slot's mark-good clears it on a healthy boot). mono-fw-setenv writes BOTH
+	# env media (QSPI mtd3 + eMMC) so it holds regardless of the firmware-boot DIP
+	# switch. If the SLOT flip fails, abort WITHOUT switching so the unit still boots
+	# the good (running) slot; if only arming fails, warn - the new slot still boots,
+	# just without the auto-rollback safety net.
+	echo "Activating slot ${new_slot} (both env media)..."
+	mono-fw-setenv slot "$new_slot" || {
+		echo "Refusing: could not set boot slot to ${new_slot}; keeping current slot"; return 1; }
+	mono-fw-setenv bootcount 0        || echo "Warning: could not reset bootcount"
+	mono-fw-setenv upgrade_available 1 || echo "Warning: could not arm rollback (upgrade_available); new slot boots without auto-rollback"
+	# The new slot's first-boot uci-default re-expands the 384M rootfs to fill its
+	# partition. sysupgrade now reboots into slot ${new_slot}; if it fails to boot
+	# bootlimit times, U-Boot's altbootcmd flips back to the good slot. Migration of
+	# an old 2-partition unit still happens on first boot (05-mono-gateway-migrate).
 }
 
 platform_copy_config_mono() {
-	local rootpart
-	rootpart="$(mono_gateway_root_part)" || {
-		echo "Could not validate rootfs for config backup"; return 1; }
+	# The config backup must land on the slot we just wrote (the INACTIVE slot),
+	# so the new slot restores it on first boot - NOT the running slot.
+	local ab rootpart
+	ab="$(mono_gateway_inactive_slot)" || {
+		echo "Could not determine the inactive A/B slot for config backup"; return 1; }
+	set -- $ab
+	rootpart="$3"			# fields: <new_slot> <bootpart> <rootpart> ...
 	mkdir -p /tmp/new_root
 	if mount -t ext4 -o rw,noatime "$rootpart" /tmp/new_root; then
-		echo "Saving config backup to new rootfs..."
+		echo "Saving config backup to the new slot rootfs ($rootpart)..."
 		cp -af "$UPGRADE_BACKUP" /tmp/new_root/sysupgrade.tgz
 		umount /tmp/new_root
 	fi

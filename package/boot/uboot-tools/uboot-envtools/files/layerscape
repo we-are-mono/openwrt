@@ -15,6 +15,21 @@ case "$board" in
 	traverse,ten64)
 		ubootenv_add_uci_config "/dev/mtd3" "0x0000" "0x80000" "0x80000"
 	;;
+	mono,gateway-dk)
+		# U-Boot's live env is in QSPI: mtd3 "uboot-env" @ flash 0x300000.
+		# NOT the eMMC 0x300000 copy - that's a stale factory image (reads
+		# "bootcmd=run emmc"); the board actually boots "run openwrt" from mtd3.
+		# Verified on hw: fw_printenv against mtd3 returns the live env. Same
+		# partition as the ten64 stanza above; single copy, CONFIG_ENV_SIZE=0x2000
+		# / CONFIG_ENV_SECT_SIZE=0x10000. Lets OpenWrt fw_setenv the A/B slot +
+		# reset bootcount (mark-good) into the same env U-Boot reads.
+		# The board has a firmware-boot DIP switch (qspi/nor vs eMMC); this mtd3
+		# config is the QSPI primary (what plain fw_printenv reads). A/B writes go
+		# to BOTH media via mono-fw-setenv (package/mono/ab-env), so the slot +
+		# bootcount stay correct regardless of DIP position - no boot-source
+		# detection needed. The eMMC copy config is /etc/fw_env.d/emmc.
+		ubootenv_add_uci_config "/dev/mtd3" "0x0" "0x2000" "0x10000"
+	;;
 esac
 
 config_load ubootenv

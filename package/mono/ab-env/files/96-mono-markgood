@@ -1,0 +1,46 @@
+#!/bin/sh
+# 96-mono-markgood - confirm the freshly-booted A/B slot by clearing the U-Boot
+# rollback trial (upgrade_available=0, bootcount=0) on the first boot after an
+# update.
+#
+# Why a uci-default and not an init script: procd does NOT invoke a classic init
+# script's boot()/start() on the FIRST boot after sysupgrade (verified on hw - it
+# runs from the 2nd boot on), but uci-defaults ARE guaranteed to run then. And
+# that first boot is exactly when a just-flashed slot must be confirmed: the
+# update armed the trial (upgrade_available=1) when it wrote the inactive slot, so
+# the new slot has to clear it to avoid an eventual auto-rollback. Every image
+# ships this hook, so each update's first boot re-runs it.
+#
+# It self-deletes (exit 0) once the trial is clear; exit 1 keeps it to retry on
+# the next boot if the env write failed or we booted from recovery. A slot that
+# never reaches this hook (kernel panic, early-init crash) never confirms, so
+# U-Boot's bootlimit/altbootcmd rolls back to the previous slot - the point of A/B.
+#
+# "reached uci-defaults" is the health signal (the "simple/booted=good" policy,
+# matching every other OpenWrt A/B board). A later health-gated confirm could
+# replace this if we ever want to catch functionally-broken-but-booting updates.
+
+# Recovery / RAM boot (tmpfs rootfs) is not the slot under trial - never confirm
+# from it; keep the hook to retry from a real slot boot.
+. /lib/upgrade/common.sh 2>/dev/null
+[ "$(rootfs_type 2>/dev/null)" = "tmpfs" ] && exit 1
+
+ua=$(fw_printenv -n upgrade_available 2>/dev/null)
+bc=$(fw_printenv -n bootcount 2>/dev/null)
+
+# Already clean (unset or 0)? Nothing to do - drop the hook, no flash write.
+if { [ -z "$ua" ] || [ "$ua" = 0 ]; } && { [ -z "$bc" ] || [ "$bc" = 0 ]; }; then
+	exit 0
+fi
+
+# First healthy boot after an update: disarm the trial on BOTH env media
+# (upgrade_available is the CONFIG_BOOTCOUNT_ENV gate; clear bootcount too).
+rc=0
+mono-fw-setenv upgrade_available 0 || rc=1
+mono-fw-setenv bootcount 0        || rc=1
+if [ "$rc" = 0 ]; then
+	logger -t mono-markgood "slot confirmed good (rollback trial cleared)"
+	exit 0
+fi
+logger -t mono-markgood "failed to clear rollback trial; will retry next boot"
+exit 1

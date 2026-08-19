@@ -1,0 +1,6 @@
+# Gateway-DK eMMC U-Boot env copy - used when the firmware-boot DIP switch
+# selects eMMC (the QSPI/NOR primary lives in /etc/fw_env.config = mtd3).
+# Matches U-Boot: CONFIG_ENV_OFFSET=0x300000, CONFIG_ENV_SIZE=0x2000,
+# CONFIG_ENV_SECT_SIZE=0x10000. mono-fw-setenv writes both copies.
+# MTD device	Device offset	Env. size	Flash sector size
+/dev/mmcblk0	0x300000	0x2000	0x10000

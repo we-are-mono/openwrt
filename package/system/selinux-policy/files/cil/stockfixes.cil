@@ -504,3 +504,22 @@
 
 (in wget
     (call .conf.read_file_files (subj)))
+
+;; ===========================================================================
+;; mono A/B — label the eMMC U-Boot env config so envtools can read it
+;; ===========================================================================
+;; Denials: file conf.file { read open } for comm="fw_setenv" path=
+;; "/etc/fw_env.d/emmc". mono-fw-setenv (package/mono/ab-env) writes the U-Boot
+;; env to BOTH media, passing the eMMC copy via `fw_setenv -c /etc/fw_env.d/emmc`
+;; (the QSPI/mtd3 primary is /etc/fw_env.config). That primary already carries
+;; envtools.conf.file (envtoolssysagent.cil:21), but the new eMMC file defaults to
+;; the generic conf.file type, which envtools.printenv.subj cannot read. Give the
+;; FILE that same envtools.conf.file type via the base block's file_context (the
+;; odhcp.server.tmp filecon idiom above; base module untouched).
+;; Label ONLY the file, NOT the dir: envtools.printenv.subj already searches
+;; generic conf.file dirs (the original denials were file read/open, never a dir
+;; search), but has no search on envtools.conf.file DIRS — relabeling the dir just
+;; trades the read denial for a dir-search denial. Leave /etc/fw_env.d as the
+;; default conf.file (searchable); only the file needs the private type.
+(in envtools.conf
+    (filecon "/etc/fw_env\.d/emmc" file file_context))

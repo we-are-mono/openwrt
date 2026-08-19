@@ -29,21 +29,24 @@ grep -q "MONO_ROOT_START_SECTOR=196608" "$S/platform.sh" || { echo "FAIL: rootfs
 grep -q "MONO_BOOT_START_SECTOR=65536"  "$S/platform.sh" || { echo "FAIL: boot sector not 65536"; exit 1; }
 grep -q '\-b "/dev/' "$S/platform.sh" && { echo "FAIL: block check not relaxed by sed"; exit 1; }
 
-valid() {  # $1 = disk name (default mmcblk0)
-	local d=${1:-mmcblk0} p; p="${d}p2"
+valid() {  # $1 = disk name (default mmcblk0); running slot A (root=p2) by default
+	local d=${1:-mmcblk0}
 	rm -rf "$S/sys" "$S/dev"
-	mkdir -p "$S/dev" "$S/sys/block/$d/device" "$S/sys/class/block/$p" \
-	         "$S/sys/class/block/${d}p1"
-	printf 'root=/dev/%s rootwait console=ttyS0,115200\n' "$p" > "$S/cmdline"
+	mkdir -p "$S/dev" "$S/sys/block/$d/device" \
+	         "$S/sys/class/block/${d}p1" "$S/sys/class/block/${d}p2" \
+	         "$S/sys/class/block/${d}p3" "$S/sys/class/block/${d}p4"
+	printf 'root=/dev/%sp2 rootwait console=ttyS0,115200\n' "$d" > "$S/cmdline"
 	printf 'mono,gateway-dk fsl,ls1046a\n' > "$S/compatible"
-	: > "$S/dev/$p"
-	echo 2      > "$S/sys/class/block/$p/partition"
-	echo 196608 > "$S/sys/class/block/$p/start"
-	echo 1      > "$S/sys/class/block/${d}p1/partition"
-	echo 65536  > "$S/sys/class/block/${d}p1/start"
+	: > "$S/dev/${d}p2"; : > "$S/dev/${d}p4"
+	echo 1      > "$S/sys/class/block/${d}p1/partition"; echo 65536   > "$S/sys/class/block/${d}p1/start"
+	echo 2      > "$S/sys/class/block/${d}p2/partition"; echo 196608  > "$S/sys/class/block/${d}p2/start"
+	echo 3      > "$S/sys/class/block/${d}p3/partition"; echo 2293760 > "$S/sys/class/block/${d}p3/start"
+	echo 4      > "$S/sys/class/block/${d}p4/partition"; echo 2424832 > "$S/sys/class/block/${d}p4/start"
 	echo 0      > "$S/sys/block/$d/removable"
 	echo MMC    > "$S/sys/block/$d/device/type"
 }
+# Switch the running slot to B (root=p4) after a valid() setup.
+use_slot_b() { local d=${1:-mmcblk0}; printf 'root=/dev/%sp4 rootwait console=ttyS0,115200\n' "$d" > "$S/cmdline"; }
 check() {  # $1: 0=accept 1=reject ; $2: desc ; $3: expected output (accept only)
 	local want="${3:-/dev/mmcblk0p2}" out rc
 	out=$(mono_gateway_root_part 2>/dev/null); rc=$?
@@ -71,12 +74,22 @@ valid; rm -f "$S/dev/mmcblk0p2";                               check 1 "rootfs d
 valid; printf 'console=ttyS0 rootwait\n' > "$S/cmdline";       check 1 "no root= on cmdline"
 # last root= wins (kernel semantics): an earlier p1 is overridden by a later p2
 valid; printf 'root=/dev/mmcblk0p1 root=/dev/mmcblk0p2 rootwait\n' > "$S/cmdline"; check 0 "last root= wins (p1 then p2)"
+# A/B: slot B rootfs (p4 @2424832) is a valid running root; boot parts (p1/p3) are not.
+valid; use_slot_b;                                             check 0 "valid p4 @2424832 (slot B running)" /dev/mmcblk0p4
+valid; printf 'root=/dev/mmcblk0p3 rootwait\n' > "$S/cmdline"; check 1 "root= is p3 (boot partition, not a slot)"
+valid; use_slot_b; echo 65536 > "$S/sys/class/block/mmcblk0p4/start"; check 1 "slot B rootfs at wrong start sector"
 
-echo "== derivation: writer picks the sibling boot partition =="
+echo "== A/B: sysupgrade writes the INACTIVE slot =="
+# running slot A (root=p2) -> write slot B: bootB p3, rootB p4
 valid
-rp=$(mono_gateway_root_part 2>/dev/null); dk=${rp%p2}; bp=${dk}p1
-if [ "$rp" = /dev/mmcblk0p2 ] && [ "$bp" = /dev/mmcblk0p1 ]; then echo "ok   rootpart=$rp bootpart=$bp"
-else echo "FAIL derivation: rootpart='$rp' bootpart='$bp'"; fails=$((fails+1)); fi
+ab=$(mono_gateway_inactive_slot 2>/dev/null)
+if [ "$ab" = "b /dev/mmcblk0p3 /dev/mmcblk0p4 3 2293760 4 2424832" ]; then echo "ok   A active -> write B"
+else echo "FAIL inactive from A: '$ab'"; fails=$((fails+1)); fi
+# running slot B (root=p4) -> write slot A: bootA p1, rootA p2
+valid; use_slot_b
+ab=$(mono_gateway_inactive_slot 2>/dev/null)
+if [ "$ab" = "a /dev/mmcblk0p1 /dev/mmcblk0p2 1 65536 2 196608" ]; then echo "ok   B active -> write A"
+else echo "FAIL inactive from B: '$ab'"; fails=$((fails+1)); fi
 
 echo "== mono_dd_member: fails if EITHER tar or dd fails =="
 # success: stubbed tar emits data, real dd writes it to a sandbox file
