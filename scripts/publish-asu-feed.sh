@@ -54,6 +54,21 @@ rsync -a --no-owner --no-group --chmod=D755,F644 "$BIN/packages/$ARCH/" "$GROOT:
 rsync -a --no-owner --no-group --chmod=D755,F644 "$TDIR/packages/"      "$GROOT:$DEST/targets/$TARGET/packages/"
 rsync -a --no-owner --no-group --chmod=F644      "$TDIR/profiles.json"  "$GROOT:$DEST/targets/$TARGET/profiles.json"
 
+# 3b. The ASU server's arch package-index endpoint (/json/v1/.../<arch>-index.json)
+#     discovers the per-arch feeds by reading a feeds.conf (asu util.parse_feeds_conf:
+#     it takes field 2 of each line as a subdir name). The mono build's feed dir ships
+#     none, so without this the arch index is EMPTY and owut reports every arch package
+#     "missing to-version, cannot upgrade". The names MUST match the served subdirs
+#     (base/luci/packages/routing/telephony/video); the URLs are ignored by asu.
+ssh "$GROOT" "cat > '$DEST/packages/$ARCH/feeds.conf' && chmod 644 '$DEST/packages/$ARCH/feeds.conf'" <<'FEEDS'
+src-git base https://git.openwrt.org/openwrt/openwrt.git
+src-git packages https://git.openwrt.org/feed/packages.git
+src-git luci https://git.openwrt.org/project/luci.git
+src-git routing https://git.openwrt.org/feed/routing.git
+src-git telephony https://git.openwrt.org/feed/telephony.git
+src-git video https://github.com/openwrt/video.git
+FEEDS
+
 # 4. bust the asu build cache (redis job/result cache + the built-image store) so a
 #    repeated request can't be served a pre-refresh (stale-revision) image.
 ssh "$GROOT" "su - asu -c 'export XDG_RUNTIME_DIR=/run/user/987; podman exec asu-deploy_redis_1 redis-cli FLUSHALL >/dev/null; rm -rf /home/asu/public/store/*'"
