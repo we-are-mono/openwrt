@@ -54,8 +54,11 @@ if [ -n "${MONO_PUBLISH_DEST:-}" ]; then
 	# not landed yet: rsync the release dir to COMPLETION first, then flip
 	# latest.json(+.sig) in a separate step. rsync renames each file into
 	# place atomically, so the manifest swap itself is atomic too.
-	rsync -a "$OUT" "$MONO_PUBLISH_DEST/"
-	rsync -a releases/latest.json releases/latest.json.sig "$MONO_PUBLISH_DEST/"
+	# --no-owner/--no-group/--chmod: land a deterministic 755/644 owned by
+	# whoever we publish as, instead of preserving the build tree's uid (1000)
+	# and group-write umask (which left orphaned 775/664 dirs on the server).
+	rsync -a --no-owner --no-group --chmod=D755,F644 "$OUT" "$MONO_PUBLISH_DEST/"
+	rsync -a --no-owner --no-group --chmod=D755,F644 releases/latest.json releases/latest.json.sig "$MONO_PUBLISH_DEST/"
 else
 	echo "mono-publish: MONO_PUBLISH_DEST unset, nothing rsynced" >&2
 fi

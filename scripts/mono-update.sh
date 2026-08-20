@@ -70,7 +70,8 @@ fi
 
 # Next revision of the release base: highest existing -rN plus one.
 LAST=$(git tag -l "mono-$LATEST-r*" | sed 's/.*-r//' | sort -n | tail -1)
-RELTAG="mono-$LATEST-r$(( ${LAST:-0} + 1 ))"
+RN=$(( ${LAST:-0} + 1 ))
+RELTAG="mono-$LATEST-r$RN"
 echo "mono-update: release $RELTAG"
 [ -n "$DRY_RUN" ] && exit 0
 
@@ -83,8 +84,8 @@ if [ "$LATEST" != "$BASE" ]; then
 	fi
 fi
 
-# Tag before building so the image can bake its own release identity
-# (mono-update reads it at build time). Dropped again on failure.
+# Tag before building so the release is a fixed point in git history; the feed
+# dir + latest.json are named from it. Dropped again on failure.
 git tag -f "$RELTAG"
 
 # From here on ANY nonzero exit - build, staging, sign, or publish - removes
@@ -94,6 +95,11 @@ git tag -f "$RELTAG"
 # into an exit, which fires the trap.
 on_exit() {
 	rc=$?
+	# `version` is a TRACKED upstream file (getver reads it FIRST; normally holds
+	# r33051-...). We overwrite it with this release's REVCODE for the build, so
+	# restore the committed content on every exit - otherwise the tree stays dirty
+	# (`D version`) and the next run's clean-tree check refuses. Restore, don't delete.
+	git checkout -- version 2>/dev/null || rm -f version
 	[ "$rc" -eq 0 ] && return 0
 	git tag -d "$RELTAG" >/dev/null 2>&1 || true
 	echo "mono-update: FAILED ($RELTAG, rc=$rc) - tag dropped, will retry next run" >&2
@@ -113,39 +119,46 @@ rm -rf "$BINDIR"
 
 cp configs/mono_gateway-dk.seed .config
 
+# Stamp this release's revision into BOTH version fields so owut (the ASU client)
+# detects every update - including ASK-only or kernel-only ones, whose package
+# versions are sha-based and non-monotonic (owut would otherwise see no change):
+#   %R  REVISION    -> device /etc/openwrt_release DISTRIB_REVISION (owut's "from")  <- version file
+#   %C  VERSION_CODE-> server/IB version_code                       (owut's "to")    <- CONFIG_VERSION_CODE
+# Value r<rN>-<shorthash>: rN is this release's monotonic counter (owut sees r11 > r10)
+# and it keeps getver's rNNNNN-hash shape so owut's parse_rev_code (/^r(\d+)-([[:xdigit:]]+)$/)
+# accepts it. CONFIG_VERSION_CODE survives `make defconfig` because the seed enables the
+# IMAGEOPT->VERSIONOPT gate. `version` is a TRACKED upstream file; the EXIT trap restores
+# its committed content (git checkout) so the tree is clean for the next run.
+REVCODE="r$RN-$(git rev-parse --short HEAD)"
+echo "$REVCODE" > version
+echo "CONFIG_VERSION_CODE=\"$REVCODE\"" >> .config
+echo "mono-update: stamping revision $REVCODE"
+
 # Build inside the pinned Nix FHS env (flake.nix) so the toolchain is identical
 # on every machine. Use `nix run` -- NOT `nix develop -c` / `nix-shell --run`,
 # which hang on the env's shellHook exec. git, publish and signing stay on the
 # host (their tools are not in the flake's package set).
-# the mono-update package is force-rebuilt (clean+compile) so /etc/mono_release
-# carries THIS release tag; otherwise every image ships the stale identity of
-# the package's first build and auto-mode devices re-flash forever.
+#
+# Build the ImageBuilder in the SAME tree state (target/imagebuilder/clean first -
+# install reuses a stale IB build_dir .config, so the REVCODE/branding change would
+# not otherwise reach it): ASU builds the fleet's upgrade images from this IB, so it
+# must carry the same REVCODE (its version_code is what owut reads as the "to" target).
 nix run . -- -c 'set -e
 	make defconfig
-	make package/mono/updater/clean package/mono/updater/compile
-	make -j"$(nproc)" world'
-
-# Verify the image actually baked THIS release's identity. The OTA client and
-# the on-device anti-rollback floor trust /etc/mono_release, so a stale value
-# (the 96b2fbc610 failure: identity package not rebuilt fresh into the rootfs)
-# would make devices misreport their version and corrupt the floor. Check the
-# assembled rootfs - the source the image is packed from - and refuse to stage
-# on any mismatch (empty = could not verify = also refuse). set -e + the EXIT
-# trap then drop the tag, so the next run rebuilds instead of shipping it.
-built_id=$(cat build_dir/target-*/root-layerscape/etc/mono_release 2>/dev/null | head -1)
-if [ "$built_id" != "$RELTAG" ]; then
-	echo "mono-update: FATAL: built rootfs identity '$built_id' != $RELTAG - refusing" >&2
-	exit 1
-fi
-echo "mono-update: verified baked identity $RELTAG"
+	make -j"$(nproc)" world
+	make target/imagebuilder/clean
+	make target/imagebuilder/install'
 
 OUT="releases/$RELTAG"
 URLBASE="${MONO_PUBLISH_URL:-https://openwrt.mono.si}"
 rm -rf "$OUT"
 mkdir -p "$OUT"
-cp "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-ext4-emmc.img.gz \
-   "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*-ext4-sysupgrade*.bin \
-   "$BINDIR"/openwrt-layerscape-armv8_64b-mono_*.manifest "$OUT/"
+# Prefix-agnostic (openwrt-/mono-/...): the image prefix comes from VERSION_DIST,
+# which the seed sets to "Mono" (artifacts are mono-*). rm -rf "$BINDIR" above means
+# only THIS build's files are present, so the leading * cannot catch strays.
+cp "$BINDIR"/*-layerscape-armv8_64b-mono_*-ext4-emmc.img.gz \
+   "$BINDIR"/*-layerscape-armv8_64b-mono_*-ext4-sysupgrade*.bin \
+   "$BINDIR"/*-layerscape-armv8_64b-mono_*.manifest "$OUT/"
 
 # Per-release kmod feed: kernel modules are vermagic-locked to this build, so
 # devices cannot get them from the official OpenWrt repo. The device's

@@ -10,12 +10,12 @@
 #             created on the device - this image only seeds bootA + rootA.
 #
 set -ex
-[ $# -eq 6 ] || {
-    echo "SYNTAX: $0 <file> <bootfs> <rootfs> <bootfs MB> <rootfs part MB> <disk sectors>"
+[ $# -eq 7 ] || {
+    echo "SYNTAX: $0 <file> <bootfs> <rootfs> <bootfs MB> <rootfs part MB> <disk sectors> <rootfs stage MB>"
     exit 1
 }
 OUTPUT="$1"; BOOTFS="$2"; ROOTFS="$3"
-BOOTFSSIZE="$4"; ROOTFSPARTSIZE="$5"; DISKSECTORS="$6"
+BOOTFSSIZE="$4"; ROOTFSPARTSIZE="$5"; DISKSECTORS="$6"; ROOTFSSTAGE="$7"
 HERE="$(dirname "$0")"
 
 # make_ext4fs output cannot be grown online (the kernel resizer rejects its
@@ -24,7 +24,7 @@ HERE="$(dirname "$0")"
 # resize then works. Verified via loop mount.
 cp "$ROOTFS" "$OUTPUT.rootfs"
 e2fsck -fy "$OUTPUT.rootfs" || [ $? -le 2 ]
-truncate -s 384M "$OUTPUT.rootfs"
+truncate -s "${ROOTFSSTAGE}M" "$OUTPUT.rootfs"
 resize2fs "$OUTPUT.rootfs"
 ROOTFS="$OUTPUT.rootfs"
 

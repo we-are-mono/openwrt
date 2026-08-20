@@ -1,0 +1,13 @@
+#!/bin/sh
+# Point the Attended Sysupgrade client (owut + luci-app-attendedsysupgrade) at the
+# mono self-hosted ASU build server. Runs after 50-attendedsysupgrade (which seeds
+# the stock sysupgrade.openwrt.org config) and 51-attendedsysupgrade-owut, so the
+# mono URL is the final value. Self-sufficient: it (re)creates the server section,
+# so it is correct even if the base default's ordering ever changes, and it re-runs
+# on every flashed image's first boot to re-assert the URL over a preserved config.
+uci -q batch <<EOF
+set attendedsysupgrade.server=server
+set attendedsysupgrade.server.url='https://sysupgrade.mono.si'
+commit attendedsysupgrade
+EOF
+exit 0
