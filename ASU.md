@@ -161,6 +161,14 @@ The IB tag is keyed by `VERSION_NUMBER` (25.12.5), **not** the revision — so a
 Public HTTPS (LE cert) in front of the asu app:
 
 ```nginx
+# CORS — luci-app-attendedsysupgrade is a BROWSER client; its cross-origin API call
+# hangs the "Searching" modal without these (§7.4). owut (router-side) is unaffected.
+add_header Access-Control-Allow-Origin  "*" always;            # `always` so it rides the 301
+add_header Access-Control-Allow-Methods "POST, GET, OPTIONS" always;
+add_header Access-Control-Allow-Headers  "*" always;
+add_header Access-Control-Expose-Headers "Authorization" always;
+if ($request_method = OPTIONS) { return 204; }                 # preflight for POST /api/v1/build
+
 location /store/    { alias /home/asu/public/store/; }         # built images (uvicorn does NOT serve these)
 location /releases/ { root  /srv/asu-feed; }                    # the mono package feed, served PUBLICLY (§7)
 location = /json/v1/overview.json {                             # rewrite the internal feed host for clients (§7)
@@ -219,7 +227,7 @@ owut's path when you run `owut check` / click "Search" in LuCI:
 6. If newer + resolvable → `POST /api/v1/build` → server builds via the IB → owut downloads from
    `/store/<hash>/…` + `sysupgrade`.
 
-Three deployment bugs each broke **every** device; all are fixed:
+Four deployment bugs; all are fixed (7.1–7.3 broke **every** device; 7.4 broke only the LuCI/browser path — `owut` was fine):
 
 ### 7.1 `upstream_url` was internal → "Searching" spun forever
 `asu.env` set `upstream_url = http://upstream` (the server's *internal* container host). owut read that
@@ -237,6 +245,22 @@ every arch package "missing". Fix: `publish-asu-feed.sh` writes a `feeds.conf` w
 (`base luci packages routing telephony video`) match the served subdirs. (Arch index went 0 → 417.)
 
 ### 7.3 Stamp looked like a downgrade → §4 (50000 base).
+
+### 7.4 LuCI "Searching" hung forever while `owut` worked → missing CORS
+`luci-app-attendedsysupgrade` runs **in the browser**: `overview.js` does a client-side
+`request.get(<server>/api/v1/overview)` — a **cross-origin** call from the router's LuCI
+origin (e.g. `http://192.168.1.1`) to `sysupgrade.mono.si`. The front nginx sent **no CORS
+headers**, so the browser blocked it; and because `/api/v1/overview` is a **301** to
+`/json/v1/overview.json`, the browser refused to even follow a cross-origin redirect that
+lacks CORS. The app's `L.resolveDefault(...)` then resolves to `null` and `!response.ok`
+throws, so the "Searching for an available sysupgrade" modal **spins forever** instead of
+erroring. `owut` (router-side CLI, no same-origin policy) was unaffected — exactly why the
+CLI worked but the LuCI button hung. Fix: the front nginx now sends the same CORS headers
+upstream `sysupgrade.openwrt.org` sends — `Access-Control-Allow-Origin: *`, `-Methods POST,
+GET, OPTIONS`, `-Headers *`, `-Expose-Headers Authorization` — with **`always`** (so they
+ride the 301) plus an `OPTIONS → 204` preflight for `POST /api/v1/build`. Verified
+end-to-end in a browser. See the §5 nginx block. **groot-local, not in git** — recreate on
+a groot rebuild.
 
 ---
 
@@ -260,6 +284,7 @@ uci get attendedsysupgrade.server.url
 | Symptom | Likely cause | Check |
 |---|---|---|
 | LuCI "Searching" spins forever | wrong `server.url`, or overview advertises `http://upstream` | `uci get …server.url`; overview `upstream_url` (§7.1) |
+| LuCI "Searching" spins but `owut` works | missing CORS on the front nginx (browser-only) | overview response carries `Access-Control-Allow-Origin` (§7.4) |
 | `owut … DOWNGRADE` | stamp below the getver constant | revision endpoint value; §4 (50000 base) |
 | `N packages missing to-version` | arch index empty | the `<arch>-index.json` count; `feeds.conf` present (§7.2) |
 | `Image not found: …imagebuilder:…` on build | IB container not (re)built for this version | `build-ib-container.sh`; registry catalog |
