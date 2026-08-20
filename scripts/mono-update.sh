@@ -124,12 +124,15 @@ cp configs/mono_gateway-dk.seed .config
 # versions are sha-based and non-monotonic (owut would otherwise see no change):
 #   %R  REVISION    -> device /etc/openwrt_release DISTRIB_REVISION (owut's "from")  <- version file
 #   %C  VERSION_CODE-> server/IB version_code                       (owut's "to")    <- CONFIG_VERSION_CODE
-# Value r<rN>-<shorthash>: rN is this release's monotonic counter (owut sees r11 > r10)
-# and it keeps getver's rNNNNN-hash shape so owut's parse_rev_code (/^r(\d+)-([[:xdigit:]]+)$/)
-# accepts it. CONFIG_VERSION_CODE survives `make defconfig` because the seed enables the
-# IMAGEOPT->VERSIONOPT gate. `version` is a TRACKED upstream file; the EXIT trap restores
-# its committed content (git checkout) so the tree is clean for the next run.
-REVCODE="r$RN-$(git rev-parse --short HEAD)"
+# Value r<50000+rN>-<shorthash>: the +50000 base clears the pre-stamp getver constant
+# (r33051-f5dae5ece4) that EVERY old build reports, so owut sees a stamped release as NEWER
+# than any pre-stamp device. Without it a low rN (r10 -> rev-num 10) parses BELOW 33051 and
+# owut calls the release a DOWNGRADE. rN still reads out of the last digits (r10 -> r50010)
+# and stays monotonic; it keeps getver's rNNNNN-hash shape so parse_rev_code
+# (/^r(\d+)-([[:xdigit:]]+)$/) accepts it. CONFIG_VERSION_CODE survives `make defconfig` via
+# the seed's IMAGEOPT->VERSIONOPT gate. `version` is a TRACKED upstream file; the EXIT trap
+# restores its committed content (git checkout) so the tree stays clean for the next run.
+REVCODE="r$((50000 + RN))-$(git rev-parse --short HEAD)"
 echo "$REVCODE" > version
 echo "CONFIG_VERSION_CODE=\"$REVCODE\"" >> .config
 echo "mono-update: stamping revision $REVCODE"
