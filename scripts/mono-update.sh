@@ -13,19 +13,24 @@
 # fails and drops the tag instead of shipping something every device rejects.
 # MONO_PUBLISH_URL is the public base URL baked into latest.json.
 #
-# Usage: scripts/mono-update.sh [--dry-run] [--force]
-#   --force: release the current base even when already up to date
-#            (first release, or re-release after local-only changes)
+# Usage: scripts/mono-update.sh [--dry-run] [--force] [--freeze-feeds]
+#   --force:        release the current base even when already up to date
+#                   (first release, or re-release after local-only changes)
+#   --freeze-feeds: keep the existing upstream feed pins instead of refreshing them
+#                   to the stable-branch HEAD - for a hotfix cut that must carry only
+#                   its own change, not incidental upstream feed churn.
 set -eu
 
 cd "$(dirname "$0")/.."
 BRANCH=mono
 DRY_RUN=""
 FORCE=""
+FREEZE_FEEDS=""
 for a in "$@"; do
 	case "$a" in
 	--dry-run) DRY_RUN=1 ;;
 	--force) FORCE=1 ;;
+	--freeze-feeds) FREEZE_FEEDS=1 ;;
 	esac
 done
 
@@ -106,11 +111,24 @@ on_exit() {
 	# restore the committed content on every exit - otherwise the tree stays dirty
 	# (`D version`) and the next run's clean-tree check refuses. Restore, don't delete.
 	git checkout -- version 2>/dev/null || rm -f version
+	# feeds.conf.default is a TRACKED upstream file that the feed-pin refresh below
+	# rewrites transiently for the build; restore upstream's pins so the tree is clean
+	# for the next run (this release's real pins are recorded in $OUT/feeds.lock).
+	git checkout -- feeds.conf.default 2>/dev/null || true
 	[ "$rc" -eq 0 ] && return 0
 	git tag -d "$RELTAG" >/dev/null 2>&1 || true
 	echo "mono-update: FAILED ($RELTAG, rc=$rc) - tag dropped, will retry next run" >&2
 }
 trap on_exit EXIT
+
+# Refresh the upstream feed pins to the current stable-branch HEAD so the release feed
+# tracks what devices apk-pull. Without this a device that ran `apk upgrade` drifts
+# ahead of the frozen release-tag pins and owut refuses the upgrade on dozens of
+# "downgrades". feeds.conf.default is edited transiently (the EXIT trap restores it);
+# the exact resolved pins are recorded in $OUT/feeds.lock below. --freeze-feeds keeps
+# the existing pins for a hotfix that must carry only its own change.
+[ -n "$FREEZE_FEEDS" ] && export MONO_FREEZE_FEEDS=1
+scripts/mono-refresh-feed-pins.sh "openwrt-$SERIES"
 
 BINDIR=bin/targets/layerscape/armv8_64b
 
@@ -176,6 +194,10 @@ cp "$BINDIR"/*-layerscape-armv8_64b-mono_*-ext4-emmc.img.gz \
 mkdir -p "$OUT/kmods"
 cp "$BINDIR"/packages/packages.adb "$BINDIR"/packages/*.apk "$OUT/kmods/"
 git format-patch --quiet -o "$OUT/patches" "$LATEST..$BRANCH"
+# Record the exact feed pins this build used. feeds.conf.default is restored to
+# upstream's tag pins by the EXIT trap, so the release's real feed state is captured
+# here (reproduce with: apply these pins, `./scripts/feeds update`, rebuild).
+grep -E '^src-' feeds.conf.default > "$OUT/feeds.lock"
 (cd "$OUT" && sha256sum *.img.gz *.bin > sha256sums)
 
 # The uncompressed legacy artifact is the only image pre-gzip devices can
