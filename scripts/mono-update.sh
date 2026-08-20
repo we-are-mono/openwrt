@@ -248,12 +248,18 @@ PY
 if [ -n "${MONO_SIGN_KEY:-}" ]; then
 	scripts/mono-sign-release.sh "$RELTAG"
 	scripts/mono-publish-release.sh "$RELTAG"
-	echo "mono-update: done - $RELTAG (published)"
+	# Refresh the self-hosted ASU server (owut / attended-sysupgrade) to THIS build,
+	# then VERIFY it serves the matching revision. Fail-closed: a mismatch (a stale IB,
+	# feed, or profiles.json) exits nonzero, set -e fires the EXIT trap, and the tag is
+	# dropped - so a published release can never silently drift from what ASU offers.
+	scripts/publish-asu-feed.sh
+	echo "mono-update: done - $RELTAG (published + ASU refreshed)"
 else
 	cat >&2 <<EOF
 mono-update: staged $RELTAG (MONO_SIGN_KEY not set, not published). To release it:
   1. scripts/mono-sign-release.sh $RELTAG      # on the signing host (needs MONO_SIGN_KEY)
   2. scripts/mono-publish-release.sh $RELTAG   # rsync + push; re-verifies, refuses unsigned
+  3. scripts/publish-asu-feed.sh               # refresh + verify the ASU server (owut)
 EOF
 	echo "mono-update: done - $RELTAG (staged, not published)"
 fi
