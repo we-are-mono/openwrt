@@ -459,38 +459,33 @@ endef
 define Device/mono_gateway-dk
   DEVICE_VENDOR := Mono
   DEVICE_MODEL := Gateway DK
-  # Fat base image = r9's full package set + the ASU cutover (r10, the first ASU
-  # release). Nothing r9 baked is dropped, so a plain r9->r10 sysupgrade loses
-  # nothing (r9 has no owut to preserve packages, so this one hop can't rely on
-  # ASU). The update path IS ASU now: owut (CLI) + luci-app-attendedsysupgrade
-  # (LuCI), pointed at https://sysupgrade.mono.si by mono-asu-config; the old
-  # mono-update signed/anti-rollback client + its LuCI app are retired here (owut
-  # bakes packages server-side). The lean trim + OpenVPN-DCO + wireguard-as-module
-  # move to r11, where owut preserves each device's real package set (so lean only
-  # ever hits new/factory installs).
+  # Lean base image (r11). The fat r10 base carried r9's full kitchen-sink package
+  # set for a lossless r9->r10 hop (r9 has no owut to preserve packages). From r11
+  # the update path IS ASU: owut (CLI) + luci-app-attendedsysupgrade preserve each
+  # device's real installed set and rebuild server-side, so the baked base only has
+  # to cover a NEW/factory install: ASK offload + board HW + Wi-Fi + SELinux + LuCI
+  # + networking/dev CLI + IPsec + OpenVPN. Everything else r9 baked (AdGuard,
+  # Tailscale, adblock/banip/https-dns-proxy, monitoring, ksmbd, USB storage, ddns/
+  # upnp/mdns, ...) is SHED: existing devices keep it (owut preserves it per-device
+  # from the stock/mono feeds on upgrade); new installs come up lean. WireGuard drops
+  # to a feed-only kmod (=m in the seed); OpenVPN stays a userspace client (IPsec is
+  # the CAAM-offloaded high-throughput path, so OpenVPN needs no in-kernel DCO here).
   #
   # Everything that must be IN ASU-rebuilt images lives HERE, not in the .seed: the
   # ASU ImageBuilder installs only DEVICE_PACKAGES (+ target/global DEFAULT_PACKAGES)
   # and IGNORES the seed's CONFIG_PACKAGE_x=y, so a seed-only package is absent from
-  # owut rebuilds. (adguardhome stays seed-only for now: the release image bakes it
-  # and owut preserves it per-device, so nobody loses it on the r9->r10 upgrade.)
+  # owut rebuilds.
   DEVICE_PACKAGES := kmod-ask-cdx kmod-ask-fci kmod-ask-auto-bridge \
 	cmm cmmqos dpa-app fmc \
 	kmod-leds-lp5812 kmod-sfp-led fancontrol lm-sensors irqbalance \
 	kmod-i2c-core kmod-hwmon-core kmod-hwmon-ina2xx kmod-hwmon-lm90 \
 	kmod-regmap-core kmod-regmap-i2c i2csfp i2c-tools usbutils pciutils \
 	kmod-nxp-mwifiex nxp-wifi-firmware-9098-pcie wpad-openssl iw usteer luci-app-usteer \
-	luci-light libustream-mbedtls px5g-mbedtls -luci-app-package-manager luci-app-statistics \
+	luci-light libustream-mbedtls px5g-mbedtls -luci-app-package-manager \
 	ip-full ethtool-full tcpdump telnet-bsd \
 	strongswan strongswan-default strongswan-mod-openssl openvpn-openssl luci-app-openvpn \
-	kmod-wireguard wireguard-tools luci-proto-wireguard tailscale \
-	adblock luci-app-adblock https-dns-proxy luci-app-https-dns-proxy banip luci-app-banip \
-	nlbwmon luci-app-nlbwmon vnstat2 luci-app-vnstat2 iftop mtr-json htop iperf3 \
-	ddns-scripts luci-app-ddns miniupnpd luci-app-upnp umdns etherwake watchcat \
-	ksmbd-server luci-app-ksmbd \
-	block-mount kmod-usb-storage-uas kmod-fs-exfat kmod-fs-ntfs3 kmod-fs-vfat smartmontools \
-	tmux vim-full curl rsync jq less bind-dig openssh-sftp-server file \
-	resize2fs e2fsprogs usign ca-bundle uboot-envtools mono-ab-env \
+	block-mount resize2fs e2fsprogs usign ca-bundle uboot-envtools mono-ab-env \
+	htop iperf3 vim-full curl rsync jq less bind-dig openssh-sftp-server file \
 	owut luci-app-attendedsysupgrade attendedsysupgrade-common mono-asu-config \
 	selinux-policy busybox-selinux procd-selinux auditd \
 	policycoreutils policycoreutils-setfiles policycoreutils-sestatus
@@ -505,10 +500,10 @@ define Device/mono_gateway-dk
   MONO_EMMC_SECTORS := 62160896
   # Build-time rootfs staging size (MiB): the ext4 is truncated to this then
   # resize2fs'd down to it, and grown to fill the 1 GiB slot (MONO_ROOTFS_PART)
-  # on first boot. Must exceed the actual rootfs content. The fat r10 base (r9's
-  # full package set + ASU) is ~373M like r9, so 512 gives comfortable headroom.
-  # Keep it comfortably below MONO_ROOTFS_PART; bump if the base image grows.
-  MONO_ROOTFS_STAGE := 512
+  # on first boot. Must exceed the actual rootfs content. The r11 lean base is
+  # ~84M, so 256 gives ~3x headroom. Keep it comfortably below MONO_ROOTFS_PART;
+  # bump if the base image grows.
+  MONO_ROOTFS_STAGE := 256
   # Keep the -sdboot alias: units flashed before 02_sysinfo_fixup stopped
   # appending it still report mono,gateway-dk-sdboot at runtime, and sysupgrade
   # refuses an image whose SUPPORTED_DEVICES lacks the running board name.

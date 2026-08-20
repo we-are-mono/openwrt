@@ -93,12 +93,18 @@ CONFIG_PACKAGE_policycoreutils-sestatus=y
 # Pulls libauparse + audit-utils + libev.
 CONFIG_PACKAGE_auditd=y
 
-# AdGuard Home — whole-house DNS filtering, baked in (as r9 shipped it). Kept in r10
-# so r9->r10 upgraders don't lose their resolver. Ships /etc/config/adguardhome +
-# adguardhome.yaml conffiles + init. Seed-only for now (the ASU ImageBuilder ignores
-# it; the release image bakes it and owut preserves it per-device on upgrade). Drags
-# the golang/host toolchain into the build + needs its own SELinux domain.
-CONFIG_PACKAGE_adguardhome=y
+# r11: WireGuard is no longer baked into the base image (was kmod-wireguard +
+# wireguard-tools + luci-proto-wireguard in DEVICE_PACKAGES). =m builds the kmod into
+# the per-release, vermagic-locked kmod feed WITHOUT installing it, so owut/ASU can
+# re-add WireGuard per-device while a new/factory install ships lean. (The userspace
+# bits — wireguard-tools, luci-proto-wireguard — are stock apk-feed packages users
+# re-add via ASU; only the kmod needs building into the mono feed.)
+CONFIG_PACKAGE_kmod-wireguard=m
+
+# AdGuard Home was baked into r9/r10 (whole-house DNS filtering). SHED from the r11
+# lean base: existing devices keep it (owut preserves adguardhome per-device from the
+# stock feed on upgrade, with adguardhome.yaml carried via /etc/sysupgrade.conf); new
+# installs fall back to the baked-in dnsmasq resolver and can re-add it via ASU.
 
 # Wi-Fi: u-blox JODY-W3 = NXP 88W9098 (Wi-Fi 6), PCIe, dual-MAC. Out-of-tree NXP
 # moal/mlan driver (kmod-nxp-mwifiex — a cfg80211 FULLMAC driver; needs the
