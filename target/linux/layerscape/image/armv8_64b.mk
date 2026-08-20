@@ -485,7 +485,7 @@ define Device/mono_gateway-dk
 	strongswan strongswan-default strongswan-mod-openssl openvpn-openssl luci-app-openvpn \
 	kmod-wireguard wireguard-tools luci-proto-wireguard tailscale \
 	adblock luci-app-adblock https-dns-proxy luci-app-https-dns-proxy banip luci-app-banip \
-	nlbwmon luci-app-nlbwmon vnstat2 luci-app-vnstat2 iftop mtr htop iperf3 \
+	nlbwmon luci-app-nlbwmon vnstat2 luci-app-vnstat2 iftop mtr-json htop iperf3 \
 	ddns-scripts luci-app-ddns miniupnpd luci-app-upnp umdns etherwake watchcat \
 	ksmbd-server luci-app-ksmbd \
 	block-mount kmod-usb-storage-uas kmod-fs-exfat kmod-fs-ntfs3 kmod-fs-vfat smartmontools \
