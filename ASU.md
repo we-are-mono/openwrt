@@ -88,7 +88,7 @@ drift from the published release (that guarantee is the whole point of folding t
 
 ---
 
-## 4. The revision stamp  (why `r50010`, not `r10`)
+## 4. The release number & revision stamp  (why `r50010`)
 
 `owut` decides "is there a newer build?" by parsing two `rNNNNN-hash` version strings and comparing
 the numeric part (`parse_rev_code = /^r(\d+)-([[:xdigit:]]+)$/`):
@@ -99,13 +99,15 @@ the numeric part (`parse_rev_code = /^r(\d+)-([[:xdigit:]]+)$/`):
   Set via **`CONFIG_VERSION_CODE`** (independent of `%R`; `version.mk` falls back to a hardcoded
   constant, never to `%R`, so both must be set).
 
-The stamp value is **`r<50000 + rN>-<shorthash>`** (e.g. r10 → `r50010-<hash>`):
+**The release number is 50000-based**, so the **git tag and the `version_code` are the same number** —
+`mono-v25.12.5-r50010` and `r50010-<hash>`. One number everywhere; nothing to reconcile.
 
 - The **`50000` base** clears the **pre-stamp getver constant `r33051-f5dae5ece4`** that *every* old
-  build reports. Without it, a low `rN` (r10 → rev-num 10) parses *below* 33051 and owut calls the
+  build reports. A bare counter (r10 → rev-num 10) would parse *below* 33051 and owut would call the
   release a **`DOWNGRADE`** — no pre-stamp device (the r9 fleet) would take the upgrade. 50000 gives
   ~17k of headroom over the current OpenWrt revision.
-- `rN` still reads out of the last digits, and the value stays monotonic (r11 → `r50011`).
+- The numbering bridges the legacy `r1..r9` tags into the base once (r9 → `r50010`), then just
+  increments (`r50010 → r50011 → …`), staying monotonic. The stamp keeps getver's `rNNNNN-hash` shape.
 
 Gotchas:
 - `CONFIG_VERSION_CODE` is dropped by `make defconfig` **unless** the seed enables the
@@ -114,12 +116,10 @@ Gotchas:
 - **`version` is a TRACKED upstream file** (holds `r33051-…`). The cut overwrites it for the build,
   and the EXIT trap **restores** it (`git checkout -- version`) — a bare `rm` would dirty the tree and
   break the next run's clean-check.
-- The stamp is decoupled from the git tag: tag = `mono-v25.12.5-r10` (human name), `version_code` =
-  `r50010-<hash>` (owut's monotonic comparator).
 
-**Re-cutting the same rN** (e.g. to fold a fix into an unshipped r10): delete the local tag
-(`git tag -d mono-v25.12.5-r10` → `RN` recomputes to 10), then re-run the cut; the publish force-updates
-the remote tag + gh release. Safe as long as no device has taken that release yet.
+**Re-cutting the same number** (to fold a fix into an unshipped release): delete the local tag
+(`git tag -d mono-v25.12.5-r50010` → the number recomputes), then re-run the cut; the publish
+force-updates the remote tag + gh release. Safe as long as no device has taken that release yet.
 
 ---
 

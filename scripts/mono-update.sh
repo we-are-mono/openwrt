@@ -68,9 +68,15 @@ else
 	fi
 fi
 
-# Next revision of the release base: highest existing -rN plus one.
+# Next release number: highest existing -rN plus one. Release numbers are BASED AT 50000
+# so the git tag == the image's version_code (see the stamp below) and both exceed the
+# pre-stamp getver constant (r33051) that owut compares against - one number everywhere,
+# no split to reason about. Bridge the legacy bare-counter tags (r1..r9) into the 50000
+# base once (r9 -> 50009 -> r50010); after that it is just +1 (r50010 -> r50011).
 LAST=$(git tag -l "mono-$LATEST-r*" | sed 's/.*-r//' | sort -n | tail -1)
-RN=$(( ${LAST:-0} + 1 ))
+LAST=${LAST:-0}
+[ "$LAST" -lt 50000 ] && LAST=$(( LAST + 50000 ))
+RN=$(( LAST + 1 ))
 RELTAG="mono-$LATEST-r$RN"
 echo "mono-update: release $RELTAG"
 [ -n "$DRY_RUN" ] && exit 0
@@ -124,15 +130,15 @@ cp configs/mono_gateway-dk.seed .config
 # versions are sha-based and non-monotonic (owut would otherwise see no change):
 #   %R  REVISION    -> device /etc/openwrt_release DISTRIB_REVISION (owut's "from")  <- version file
 #   %C  VERSION_CODE-> server/IB version_code                       (owut's "to")    <- CONFIG_VERSION_CODE
-# Value r<50000+rN>-<shorthash>: the +50000 base clears the pre-stamp getver constant
+# Value r<RN>-<shorthash>, where RN is the 50000-based release number (identical to the git
+# tag - one number everywhere). The 50000 base clears the pre-stamp getver constant
 # (r33051-f5dae5ece4) that EVERY old build reports, so owut sees a stamped release as NEWER
-# than any pre-stamp device. Without it a low rN (r10 -> rev-num 10) parses BELOW 33051 and
-# owut calls the release a DOWNGRADE. rN still reads out of the last digits (r10 -> r50010)
-# and stays monotonic; it keeps getver's rNNNNN-hash shape so parse_rev_code
+# than any pre-stamp device (a bare counter like r10 would parse BELOW 33051 and owut would
+# call it a DOWNGRADE). Monotonic; keeps getver's rNNNNN-hash shape so parse_rev_code
 # (/^r(\d+)-([[:xdigit:]]+)$/) accepts it. CONFIG_VERSION_CODE survives `make defconfig` via
 # the seed's IMAGEOPT->VERSIONOPT gate. `version` is a TRACKED upstream file; the EXIT trap
 # restores its committed content (git checkout) so the tree stays clean for the next run.
-REVCODE="r$((50000 + RN))-$(git rev-parse --short HEAD)"
+REVCODE="r$RN-$(git rev-parse --short HEAD)"
 echo "$REVCODE" > version
 echo "CONFIG_VERSION_CODE=\"$REVCODE\"" >> .config
 echo "mono-update: stamping revision $REVCODE"
