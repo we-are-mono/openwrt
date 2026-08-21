@@ -29,7 +29,7 @@ TDIR="$BIN/targets/$TARGET"
 
 TARBALL=$(ls "$TDIR"/*-imagebuilder-*.tar.zst 2>/dev/null | head -1)
 [ -n "$TARBALL" ] || { echo "publish-asu: no ImageBuilder tarball under $TDIR (run: make target/imagebuilder/install)" >&2; exit 1; }
-VER=$(tar --zstd -xOf "$TARBALL" --wildcards '*/repositories' 2>/dev/null | sed -n 's|.*/releases/\([0-9.]\+\)/.*|\1|p' | head -1)
+VER=$(tar --zstd -xOf "$TARBALL" --wildcards '*/repositories' 2>/dev/null | sed -n 's|.*/releases/\([^/]\+\)/.*|\1|p' | head -1)
 # The revision the client compares against: the version_code baked into THIS build's
 # profiles.json, which is exactly what the ASU /api/v1/revision endpoint serves back
 # once we ship that profiles.json to the feed.
@@ -50,6 +50,9 @@ REMOTE
 
 # 2 + 3. package feed (additive, no --delete so older/dropped apks stay re-installable)
 #         + the target profiles.json the revision endpoint reads.
+# A brand-new version dir has no parents yet, and rsync won't create multiple missing
+# path levels without --mkpath - so make the tree first (idempotent for existing ones).
+ssh "$GROOT" "mkdir -p '$DEST/packages/$ARCH' '$DEST/targets/$TARGET'"
 rsync -a --no-owner --no-group --chmod=D755,F644 "$BIN/packages/$ARCH/" "$GROOT:$DEST/packages/$ARCH/"
 rsync -a --no-owner --no-group --chmod=D755,F644 "$TDIR/packages/"      "$GROOT:$DEST/targets/$TARGET/packages/"
 rsync -a --no-owner --no-group --chmod=F644      "$TDIR/profiles.json"  "$GROOT:$DEST/targets/$TARGET/profiles.json"
