@@ -477,11 +477,11 @@ define Device/mono_gateway-dk
   # owut rebuilds.
   # ASK hardware offload (CPE_FAST_PATH=y): the offload control stack (cmm/cdx/fci)
   # rides on the fast-path kernel hooks. fmc (FMan config) is SDK-level and stays.
-  # Wi-Fi is still dropped: the nxp-mwifiex / mac80211 backports do not build on
-  # 6.12.103 yet (WIP, separate track; the router has no card). RE-ADD for Wi-Fi:
-  #   kmod-nxp-mwifiex nxp-wifi-firmware-9098-pcie wpad-openssl iw usteer luci-app-usteer
+  # Wi-Fi (JODY-W3 / 88W9098): NXP moal/mlan cfg80211 FULLMAC driver + firmware,
+  # wpad-openssl (VHT/HE), iw, and usteer band-steering.
   DEVICE_PACKAGES := fmc \
 	kmod-ask-cdx kmod-ask-fci kmod-ask-auto-bridge cmm cmmqos dpa-app \
+	kmod-nxp-mwifiex nxp-wifi-firmware-9098-pcie wpad-openssl iw usteer luci-app-usteer \
 	kmod-leds-lp5812 kmod-sfp-led fancontrol lm-sensors irqbalance \
 	kmod-i2c-core kmod-hwmon-core kmod-hwmon-ina2xx kmod-hwmon-lm90 \
 	kmod-regmap-core kmod-regmap-i2c i2csfp i2c-tools usbutils pciutils \

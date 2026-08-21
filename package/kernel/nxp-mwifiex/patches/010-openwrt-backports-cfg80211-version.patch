@@ -5,7 +5,7 @@ is MAX(LINUX_VERSION_CODE, COMPAT_VERSION_CODE). Out of the box
 COMPAT_VERSION_CODE is KERNEL_VERSION(0,0,0), so the effective version equals
 the running kernel (6.12.49). But on OpenWrt cfg80211 comes from the mac80211
 *backports* package, whose API is much newer than the kernel it runs on --
-here backports v6.18.26 (BACKPORTED_KERNEL_VERSION). The driver already carries
+here backports v6.18.39 (BACKPORTED_KERNEL_VERSION). The driver already carries
 the matching newer code paths (guards up to KERNEL_VERSION(6,17,0)/(6,18,0)),
 they just aren't selected, so struct cfg80211_ops initialisers (get/set_antenna
 gained a radio_idx, set_monitor_channel gained a net_device*, get/set_txpower
@@ -25,7 +25,7 @@ backports version is bumped, update the KERNEL_VERSION() below to match.
  #endif
 
 -#define COMPAT_VERSION_CODE KERNEL_VERSION(0, 0, 0)
-+#define COMPAT_VERSION_CODE KERNEL_VERSION(6, 18, 26)
++#define COMPAT_VERSION_CODE KERNEL_VERSION(6, 18, 39)
  #define CFG80211_VERSION_CODE MAX(LINUX_VERSION_CODE, COMPAT_VERSION_CODE)
 
  #define IMX_ANDROID_13 0
