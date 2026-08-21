@@ -1,0 +1,21 @@
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Thu, 21 Aug 2025 12:00:00 +0000
+Subject: [PATCH] net: phy: swphy: accept 10G fixed-link speed
+
+The Mono Gateway's 10G MACs (xfi) use a fixed-link at 10000 Mbit/s. mainline's
+swphy only decodes 10/100/1000, so a 10G fixed-link returns -EINVAL and the MAC
+fails to probe ("swphy: unknown speed"). Decode 10000 like 1000 (the swphy MII
+register set has no distinct 10G code), matching the NXP LSDK kernel.
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+--- a/drivers/net/phy/swphy.c
++++ b/drivers/net/phy/swphy.c
+@@ -71,6 +71,7 @@
+ static int swphy_decode_speed(int speed)
+ {
+ 	switch (speed) {
++	case 10000:
+ 	case 1000:
+ 		return SWMII_SPEED_1000;
+ 	case 100:

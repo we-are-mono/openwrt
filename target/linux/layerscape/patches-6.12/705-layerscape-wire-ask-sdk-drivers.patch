@@ -1,0 +1,39 @@
+--- a/drivers/net/ethernet/freescale/Kconfig
++++ b/drivers/net/ethernet/freescale/Kconfig
+@@ -106,5 +106,7 @@ config GIANFAR
+ source "drivers/net/ethernet/freescale/dpaa/Kconfig"
+ source "drivers/net/ethernet/freescale/dpaa2/Kconfig"
+ source "drivers/net/ethernet/freescale/enetc/Kconfig"
++source "drivers/net/ethernet/freescale/sdk_fman/Kconfig"
++source "drivers/net/ethernet/freescale/sdk_dpaa/Kconfig"
+ 
+ endif # NET_VENDOR_FREESCALE
+--- a/drivers/net/ethernet/freescale/Makefile
++++ b/drivers/net/ethernet/freescale/Makefile
+@@ -21,6 +21,8 @@ ucc_geth_driver-objs := ucc_geth.o ucc_g
+ 
+ obj-$(CONFIG_FSL_FMAN) += fman/
+ obj-$(CONFIG_FSL_DPAA_ETH) += dpaa/
++obj-$(if $(CONFIG_FSL_SDK_FMAN),y) += sdk_fman/
++obj-$(if $(CONFIG_FSL_SDK_DPAA_ETH),y) += sdk_dpaa/
+ 
+ obj-y += dpaa2/
+ obj-y += enetc/
+--- a/drivers/staging/Kconfig
++++ b/drivers/staging/Kconfig
+@@ -62,6 +62,8 @@ source "drivers/staging/fieldbus/Kconfig
+ 
+ source "drivers/staging/vme_user/Kconfig"
+ 
++source "drivers/staging/fsl_qbman/Kconfig"
++
+ source "drivers/staging/fsl_ppfe/Kconfig"
+ 
+ endif # STAGING
+--- a/drivers/staging/Makefile
++++ b/drivers/staging/Makefile
+@@ -21,3 +21,4 @@ obj-$(CONFIG_BCM2835_VCHIQ)	+= vc04_serv
+ obj-$(CONFIG_XIL_AXIS_FIFO)	+= axis-fifo/
+ obj-$(CONFIG_FIELDBUS_DEV)     += fieldbus/
+ obj-$(CONFIG_FSL_PPFE)		+= fsl_ppfe/
++obj-$(CONFIG_FSL_SDK_DPA)	+= fsl_qbman/

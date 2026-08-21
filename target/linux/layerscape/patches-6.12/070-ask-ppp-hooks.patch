@@ -20,11 +20,9 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  drivers/net/ppp/pppoe.c       | 23 +++++++++++++++++++++++
  2 files changed, 45 insertions(+)
 
-diff --git a/drivers/net/ppp/ppp_generic.c b/drivers/net/ppp/ppp_generic.c
-index afc1566488b3..fd54899c1a6b 100644
 --- a/drivers/net/ppp/ppp_generic.c
 +++ b/drivers/net/ppp/ppp_generic.c
-@@ -3482,6 +3482,9 @@ ppp_connect_channel(struct channel *pch, int unit)
+@@ -3506,6 +3506,9 @@ ppp_connect_channel(struct channel *pch,
  	struct ppp_net *pn;
  	int ret = -ENXIO;
  	int hdrlen;
@@ -34,10 +32,10 @@ index afc1566488b3..fd54899c1a6b 100644
  
  	pn = ppp_pernet(pch->chan_net);
  
-@@ -3519,8 +3522,27 @@ ppp_connect_channel(struct channel *pch, int unit)
+@@ -3547,8 +3550,27 @@ ppp_connect_channel(struct channel *pch,
  
   outl:
- 	write_unlock_bh(&pch->upl);
+ 	spin_unlock(&pch->upl);
 +#if defined(CONFIG_CPE_FAST_PATH)
 +	/* Only take a device reference here; the NEWLINK notification is
 +	 * sent after all_ppp_mutex is dropped. Taking rtnl_lock while
@@ -62,11 +60,9 @@ index afc1566488b3..fd54899c1a6b 100644
  	return ret;
  }
  
-diff --git a/drivers/net/ppp/pppoe.c b/drivers/net/ppp/pppoe.c
-index 2ea4f4890d23..454468f3a8d6 100644
 --- a/drivers/net/ppp/pppoe.c
 +++ b/drivers/net/ppp/pppoe.c
-@@ -948,6 +948,14 @@ static int __pppoe_xmit(struct sock *sk, struct sk_buff *skb)
+@@ -960,6 +960,14 @@ static int __pppoe_xmit(struct sock *sk,
  
  	skb->protocol = cpu_to_be16(ETH_P_PPP_SES);
  	skb->dev = dev;
@@ -81,7 +77,7 @@ index 2ea4f4890d23..454468f3a8d6 100644
  
  	dev_hard_header(skb, dev, ETH_P_PPP_SES,
  			po->pppoe_pa.remote, NULL, data_len);
-@@ -1030,17 +1038,32 @@ static int pppoe_seq_show(struct seq_file *seq, void *v)
+@@ -1042,17 +1050,32 @@ static int pppoe_seq_show(struct seq_fil
  {
  	struct pppox_sock *po;
  	char *dev_name;
@@ -114,6 +110,3 @@ index 2ea4f4890d23..454468f3a8d6 100644
  out:
  	return 0;
  }
--- 
-2.47.3
-

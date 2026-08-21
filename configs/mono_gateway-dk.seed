@@ -35,10 +35,6 @@ CONFIG_VERSION_DIST="Mono"
 # kmods still come from the mono per-release feed (vermagic-locked).
 CONFIG_FEED_luci=y
 CONFIG_FEED_packages=y
-CONFIG_KERNEL_GIT_CLONE_URI="https://github.com/nxp-qoriq/linux"
-CONFIG_KERNEL_GIT_LOCAL_REPOSITORY=""
-CONFIG_KERNEL_GIT_MIRROR_HASH=""
-CONFIG_KERNEL_GIT_REF="df24f9428e38740256a410b983003a478e72a7c0"
 CONFIG_PACKAGE_block-mount=y
 # Networking-kit CLI: full ip (iproute2) + ethtool over the busybox/tiny variants.
 # ip-full and ip-tiny both provide /usr/bin/ip and CONFLICT, so ip-tiny must go off
@@ -116,18 +112,21 @@ CONFIG_PACKAGE_kmod-wireguard=m
 # defconfig pulls the rest (kmod-cfg80211, wifi-scripts, wireless-regdb,
 # hostapd-common, ucode-mod-nl80211). LuCI manages the radios natively via
 # mac80211.sh (no custom handler); harmless no-op on a board with no M.2 card.
-CONFIG_PACKAGE_kmod-nxp-mwifiex=y
-CONFIG_PACKAGE_nxp-wifi-firmware-9098-pcie=y
-CONFIG_PACKAGE_wpad-openssl=y
-CONFIG_PACKAGE_iw=y
+# SDK-only staging: Wi-Fi (nxp-mwifiex + the mac80211/cfg80211 backports it pulls)
+# does not build on 6.12.103 yet; disabled to validate the SDK port in isolation.
+# Re-enable all six for the full image once the wifi backports are ported.
+# CONFIG_PACKAGE_kmod-nxp-mwifiex is not set
+# CONFIG_PACKAGE_nxp-wifi-firmware-9098-pcie is not set
+# CONFIG_PACKAGE_wpad-openssl is not set
+# CONFIG_PACKAGE_iw is not set
 
 # usteer: single-SSID dual-band band-steering daemon — pushes 5 GHz-capable STAs to
 # 5 GHz and BTM-nudges sticky clients (relies on the 802.11k/v rrm_*/bss_transition
 # set on the wifi-ifaces). luci-app-usteer adds the LuCI steering config + status UI.
 # New daemon on permissive dssp -> carries its own AVC fixes in selinux-policy.
 # Harmless no-op on a board with no radios (no APs to steer).
-CONFIG_PACKAGE_usteer=y
-CONFIG_PACKAGE_luci-app-usteer=y
+# CONFIG_PACKAGE_usteer is not set (SDK-only staging — see the Wi-Fi note above)
+# CONFIG_PACKAGE_luci-app-usteer is not set
 
 # Drop LuCI's Software (apk) WEB frontend only. It made the cgi-io helper exec apk,
 # dragging a large SELinux AVC surface (apk data/conf/cache reads + exec) into the

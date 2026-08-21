@@ -47,8 +47,6 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  create mode 100644 net/xfrm/ipsec_flow.c
  create mode 100644 net/xfrm/ipsec_flow.h
 
-diff --git a/drivers/crypto/caam/pdb.h b/drivers/crypto/caam/pdb.h
-index 4b1bcf53f7ac..1669e0d267e3 100644
 --- a/drivers/crypto/caam/pdb.h
 +++ b/drivers/crypto/caam/pdb.h
 @@ -145,7 +145,7 @@ struct ipsec_encap_pdb {
@@ -105,11 +103,9 @@ index 4b1bcf53f7ac..1669e0d267e3 100644
  
  /*
   * IPSec ESP Datapath Protocol Override Register (DPOVRD)
-diff --git a/include/net/ip6_tunnel.h b/include/net/ip6_tunnel.h
-index 399592405c72..d06bc52b02fa 100644
 --- a/include/net/ip6_tunnel.h
 +++ b/include/net/ip6_tunnel.h
-@@ -52,7 +52,9 @@ struct ip6_tnl {
+@@ -65,7 +65,9 @@ struct ip6_tnl {
  	struct flowi fl;	/* flowi template for xmit */
  	struct dst_cache dst_cache;	/* cached dst */
  	struct gro_cells gro_cells;
@@ -120,8 +116,6 @@ index 399592405c72..d06bc52b02fa 100644
  	int err_count;
  	unsigned long err_time;
  
-diff --git a/include/net/netns/xfrm.h b/include/net/netns/xfrm.h
-index 23dd647fe024..9c7c9758e5e1 100644
 --- a/include/net/netns/xfrm.h
 +++ b/include/net/netns/xfrm.h
 @@ -42,6 +42,9 @@ struct netns_xfrm {
@@ -134,8 +128,6 @@ index 23dd647fe024..9c7c9758e5e1 100644
  	struct hlist_head	__rcu *state_byseq;
  	struct hlist_head	 __percpu *state_cache_input;
  	unsigned int		state_hmask;
-diff --git a/include/net/xfrm.h b/include/net/xfrm.h
-index 1484dd15a369..b91a74c0d7d2 100644
 --- a/include/net/xfrm.h
 +++ b/include/net/xfrm.h
 @@ -183,6 +183,12 @@ struct xfrm_state {
@@ -189,8 +181,6 @@ index 1484dd15a369..b91a74c0d7d2 100644
  
  /* callback structure passed from either netlink or pfkey */
  struct km_event {
-diff --git a/include/uapi/linux/pfkeyv2.h b/include/uapi/linux/pfkeyv2.h
-index 8abae1f6749c..e92494a1ac99 100644
 --- a/include/uapi/linux/pfkeyv2.h
 +++ b/include/uapi/linux/pfkeyv2.h
 @@ -281,6 +281,7 @@ struct sadb_x_filter {
@@ -201,8 +191,6 @@ index 8abae1f6749c..e92494a1ac99 100644
  
  /* Security Association states */
  #define SADB_SASTATE_LARVAL	0
-diff --git a/net/ipv4/Kconfig b/net/ipv4/Kconfig
-index 6d2c97f8e9ef..eebe4c9c6dd4 100644
 --- a/net/ipv4/Kconfig
 +++ b/net/ipv4/Kconfig
 @@ -392,6 +392,12 @@ config INET_ESPINTCP
@@ -218,11 +206,9 @@ index 6d2c97f8e9ef..eebe4c9c6dd4 100644
  config INET_IPCOMP
  	tristate "IP: IPComp transformation"
  	select INET_XFRM_TUNNEL
-diff --git a/net/ipv4/xfrm4_policy.c b/net/ipv4/xfrm4_policy.c
-index 7e1c2faed1ff..985934c2e331 100644
 --- a/net/ipv4/xfrm4_policy.c
 +++ b/net/ipv4/xfrm4_policy.c
-@@ -33,6 +33,19 @@ static struct dst_entry *__xfrm4_dst_lookup(struct flowi4 *fl4,
+@@ -33,6 +33,19 @@ static struct dst_entry *__xfrm4_dst_loo
  	fl4->flowi4_proto = params->ipproto;
  	fl4->uli = params->uli;
  
@@ -242,8 +228,6 @@ index 7e1c2faed1ff..985934c2e331 100644
  	rt = __ip_route_output_key(params->net, fl4);
  	if (!IS_ERR(rt))
  		return &rt->dst;
-diff --git a/net/ipv6/Kconfig b/net/ipv6/Kconfig
-index 1c9c686d9522..396a081a12b9 100644
 --- a/net/ipv6/Kconfig
 +++ b/net/ipv6/Kconfig
 @@ -103,6 +103,12 @@ config INET6_ESPINTCP
@@ -259,11 +243,9 @@ index 1c9c686d9522..396a081a12b9 100644
  config INET6_IPCOMP
  	tristate "IPv6: IPComp transformation"
  	select INET6_XFRM_TUNNEL
-diff --git a/net/ipv6/xfrm6_policy.c b/net/ipv6/xfrm6_policy.c
-index 1f19b6f14484..090c1456274f 100644
 --- a/net/ipv6/xfrm6_policy.c
 +++ b/net/ipv6/xfrm6_policy.c
-@@ -40,6 +40,16 @@ static struct dst_entry *xfrm6_dst_lookup(const struct xfrm_dst_lookup_params *p
+@@ -40,6 +40,16 @@ static struct dst_entry *xfrm6_dst_looku
  	fl6.flowi4_proto = params->ipproto;
  	fl6.uli = params->uli;
  
@@ -280,8 +262,6 @@ index 1f19b6f14484..090c1456274f 100644
  	dst = ip6_route_output(params->net, NULL, &fl6);
  
  	err = dst->error;
-diff --git a/net/key/af_key.c b/net/key/af_key.c
-index c56bb4f451e6..7ac376e9dcb1 100644
 --- a/net/key/af_key.c
 +++ b/net/key/af_key.c
 @@ -26,8 +26,178 @@
@@ -463,7 +443,7 @@ index c56bb4f451e6..7ac376e9dcb1 100644
  
  #define _X2KEY(x) ((x) == XFRM_INF ? 0 : (x))
  #define _KEY2X(x) ((x) == 0 ? XFRM_INF : (x))
-@@ -876,6 +1046,10 @@ static struct sk_buff *__pfkey_xfrm_state2msg(const struct xfrm_state *x,
+@@ -892,6 +1062,10 @@ static struct sk_buff *__pfkey_xfrm_stat
  		sa->sadb_sa_flags |= SADB_SAFLAGS_DECAP_DSCP;
  	if (x->props.flags & XFRM_STATE_NOPMTUDISC)
  		sa->sadb_sa_flags |= SADB_SAFLAGS_NOPMTUDISC;
@@ -474,7 +454,7 @@ index c56bb4f451e6..7ac376e9dcb1 100644
  
  	/* hard time */
  	if (hsc & 2) {
-@@ -908,6 +1082,11 @@ static struct sk_buff *__pfkey_xfrm_state2msg(const struct xfrm_state *x,
+@@ -924,6 +1098,11 @@ static struct sk_buff *__pfkey_xfrm_stat
  	lifetime->sadb_lifetime_bytes = x->curlft.bytes;
  	lifetime->sadb_lifetime_addtime = x->curlft.add_time;
  	lifetime->sadb_lifetime_usetime = x->curlft.use_time;
@@ -486,7 +466,7 @@ index c56bb4f451e6..7ac376e9dcb1 100644
  	/* src address */
  	addr = skb_put(skb, sizeof(struct sadb_address) + sockaddr_size);
  	addr->sadb_address_len =
-@@ -1133,6 +1312,10 @@ static struct xfrm_state * pfkey_msg2xfrm_state(struct net *net,
+@@ -1149,6 +1328,10 @@ static struct xfrm_state * pfkey_msg2xfr
  		x->props.flags |= XFRM_STATE_DECAP_DSCP;
  	if (sa->sadb_sa_flags & SADB_SAFLAGS_NOPMTUDISC)
  		x->props.flags |= XFRM_STATE_NOPMTUDISC;
@@ -497,7 +477,7 @@ index c56bb4f451e6..7ac376e9dcb1 100644
  
  	lifetime = ext_hdrs[SADB_EXT_LIFETIME_HARD - 1];
  	if (lifetime != NULL) {
-@@ -3076,6 +3259,12 @@ static int pfkey_send_notify(struct xfrm_state *x, const struct km_event *c)
+@@ -3093,6 +3276,12 @@ static int pfkey_send_notify(struct xfrm
  	struct net *net = x ? xs_net(x) : c->net;
  	struct netns_pfkey *net_pfkey = net_generic(net, pfkey_net_id);
  
@@ -510,7 +490,7 @@ index c56bb4f451e6..7ac376e9dcb1 100644
  	if (atomic_read(&net_pfkey->socks_nr) == 0)
  		return 0;
  
-@@ -3863,6 +4052,702 @@ static struct xfrm_mgr pfkeyv2_mgr =
+@@ -3885,6 +4074,702 @@ static struct xfrm_mgr pfkeyv2_mgr =
  	.is_alive	= pfkey_is_alive,
  };
  
@@ -1213,7 +1193,7 @@ index c56bb4f451e6..7ac376e9dcb1 100644
  static int __net_init pfkey_net_init(struct net *net)
  {
  	struct netns_pfkey *net_pfkey = net_generic(net, pfkey_net_id);
-@@ -3897,6 +4782,11 @@ static void __exit ipsec_pfkey_exit(void)
+@@ -3919,6 +4804,11 @@ static void __exit ipsec_pfkey_exit(void
  	sock_unregister(PF_KEY);
  	unregister_pernet_subsys(&pfkey_net_ops);
  	proto_unregister(&key_proto);
@@ -1225,7 +1205,7 @@ index c56bb4f451e6..7ac376e9dcb1 100644
  }
  
  static int __init ipsec_pfkey_init(void)
-@@ -3913,6 +4803,12 @@ static int __init ipsec_pfkey_init(void)
+@@ -3935,6 +4825,12 @@ static int __init ipsec_pfkey_init(void)
  	if (err != 0)
  		goto out_unregister_pernet;
  	xfrm_register_km(&pfkeyv2_mgr);
@@ -1238,18 +1218,13 @@ index c56bb4f451e6..7ac376e9dcb1 100644
  out:
  	return err;
  
-diff --git a/net/xfrm/Makefile b/net/xfrm/Makefile
-index 512e0b2f8514..e8e13e0fd593 100644
 --- a/net/xfrm/Makefile
 +++ b/net/xfrm/Makefile
-@@ -23,3 +23,4 @@ obj-$(CONFIG_XFRM_IPCOMP) += xfrm_ipcomp.o
+@@ -23,3 +23,4 @@ obj-$(CONFIG_XFRM_IPCOMP) += xfrm_ipcomp
  obj-$(CONFIG_XFRM_INTERFACE) += xfrm_interface.o
  obj-$(CONFIG_XFRM_ESPINTCP) += espintcp.o
  obj-$(CONFIG_DEBUG_INFO_BTF) += xfrm_state_bpf.o
 +obj-$(CONFIG_INET_IPSEC_OFFLOAD) += ipsec_flow.o
-diff --git a/net/xfrm/ipsec_flow.c b/net/xfrm/ipsec_flow.c
-new file mode 100644
-index 000000000000..61e8b22f23fa
 --- /dev/null
 +++ b/net/xfrm/ipsec_flow.c
 @@ -0,0 +1,231 @@
@@ -1484,9 +1459,6 @@ index 000000000000..61e8b22f23fa
 +EXPORT_SYMBOL(ipsec_flow_fini);
 +#endif
 +
-diff --git a/net/xfrm/ipsec_flow.h b/net/xfrm/ipsec_flow.h
-new file mode 100644
-index 000000000000..ee8a7fa571b8
 --- /dev/null
 +++ b/net/xfrm/ipsec_flow.h
 @@ -0,0 +1,31 @@
@@ -1521,8 +1493,6 @@ index 000000000000..ee8a7fa571b8
 +int ipsec_flow_add(struct net *net, const struct flowi *flow, u16 family, u8 dir, u16 *xfrm_handle);
 +#endif
 +
-diff --git a/net/xfrm/xfrm_input.c b/net/xfrm/xfrm_input.c
-index 841a60a6fbfe..4952428eac00 100644
 --- a/net/xfrm/xfrm_input.c
 +++ b/net/xfrm/xfrm_input.c
 @@ -44,6 +44,10 @@ struct xfrm_trans_cb {
@@ -1536,7 +1506,7 @@ index 841a60a6fbfe..4952428eac00 100644
  static DEFINE_SPINLOCK(xfrm_input_afinfo_lock);
  static struct xfrm_input_afinfo const __rcu *xfrm_input_afinfo[2][AF_INET6 + 1];
  
-@@ -599,6 +603,22 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
+@@ -599,6 +603,22 @@ int xfrm_input(struct sk_buff *skb, int
  			goto drop;
  		}
  
@@ -1559,11 +1529,9 @@ index 841a60a6fbfe..4952428eac00 100644
  lock:
  		spin_lock(&x->lock);
  
-diff --git a/net/xfrm/xfrm_output.c b/net/xfrm/xfrm_output.c
-index a30538a980cc..06a66b6aae92 100644
 --- a/net/xfrm/xfrm_output.c
 +++ b/net/xfrm/xfrm_output.c
-@@ -67,6 +67,10 @@ static int xfrm4_transport_output(struct xfrm_state *x, struct sk_buff *skb)
+@@ -67,6 +67,10 @@ static int xfrm4_transport_output(struct
  	struct iphdr *iph = ip_hdr(skb);
  	int ihl = iph->ihl * 4;
  
@@ -1574,7 +1542,7 @@ index a30538a980cc..06a66b6aae92 100644
  	skb_set_inner_transport_header(skb, skb_transport_offset(skb));
  
  	skb_set_network_header(skb, -x->props.header_len);
-@@ -167,6 +171,10 @@ static int xfrm6_transport_output(struct xfrm_state *x, struct sk_buff *skb)
+@@ -167,6 +171,10 @@ static int xfrm6_transport_output(struct
  	u8 *prevhdr;
  	int hdr_len;
  
@@ -1585,7 +1553,7 @@ index a30538a980cc..06a66b6aae92 100644
  	iph = ipv6_hdr(skb);
  	skb_set_inner_transport_header(skb, skb_transport_offset(skb));
  
-@@ -413,6 +421,10 @@ static int xfrm4_prepare_output(struct xfrm_state *x, struct sk_buff *skb)
+@@ -413,6 +421,10 @@ static int xfrm4_prepare_output(struct x
  	IPCB(skb)->flags |= IPSKB_XFRM_TUNNEL_SIZE;
  	skb->protocol = htons(ETH_P_IP);
  
@@ -1596,7 +1564,7 @@ index a30538a980cc..06a66b6aae92 100644
  	switch (x->props.mode) {
  	case XFRM_MODE_BEET:
  		return xfrm4_beet_encap_add(x, skb);
-@@ -436,6 +448,10 @@ static int xfrm6_prepare_output(struct xfrm_state *x, struct sk_buff *skb)
+@@ -436,6 +448,10 @@ static int xfrm6_prepare_output(struct x
  	skb->ignore_df = 1;
  	skb->protocol = htons(ETH_P_IPV6);
  
@@ -1607,7 +1575,7 @@ index a30538a980cc..06a66b6aae92 100644
  	switch (x->props.mode) {
  	case XFRM_MODE_BEET:
  		return xfrm6_beet_encap_add(x, skb);
-@@ -492,11 +508,40 @@ static int xfrm_output_one(struct sk_buff *skb, int err)
+@@ -492,11 +508,40 @@ static int xfrm_output_one(struct sk_buf
  	struct dst_entry *dst = skb_dst(skb);
  	struct xfrm_state *x = dst->xfrm;
  	struct net *net = xs_net(x);
@@ -1648,7 +1616,7 @@ index a30538a980cc..06a66b6aae92 100644
  		err = xfrm_skb_check_space(skb);
  		if (err) {
  			XFRM_INC_STATS(net, LINUX_MIB_XFRMOUTERROR);
-@@ -561,6 +606,9 @@ static int xfrm_output_one(struct sk_buff *skb, int err)
+@@ -561,6 +606,9 @@ resume:
  			goto error_nolock;
  		}
  
@@ -1658,7 +1626,7 @@ index a30538a980cc..06a66b6aae92 100644
  		dst = skb_dst_pop(skb);
  		if (!dst) {
  			XFRM_INC_STATS(net, LINUX_MIB_XFRMOUTERROR);
-@@ -571,11 +619,40 @@ static int xfrm_output_one(struct sk_buff *skb, int err)
+@@ -571,11 +619,40 @@ resume:
  		x = dst->xfrm;
  	} while (x && !(x->outer_mode.flags & XFRM_MODE_FLAG_TUNNEL));
  
@@ -1699,7 +1667,7 @@ index a30538a980cc..06a66b6aae92 100644
  	kfree_skb(skb);
  out:
  	return err;
-@@ -862,10 +939,20 @@ static int xfrm4_extract_output(struct xfrm_state *x, struct sk_buff *skb)
+@@ -866,10 +943,20 @@ static int xfrm4_extract_output(struct x
  	if (err)
  		return err;
  
@@ -1720,7 +1688,7 @@ index a30538a980cc..06a66b6aae92 100644
  }
  
  #if IS_ENABLED(CONFIG_IPV6)
-@@ -909,10 +996,18 @@ static int xfrm6_extract_output(struct xfrm_state *x, struct sk_buff *skb)
+@@ -914,10 +1001,18 @@ static int xfrm6_extract_output(struct x
  	if (err)
  		return err;
  
@@ -1739,8 +1707,6 @@ index a30538a980cc..06a66b6aae92 100644
  #else
  	WARN_ON_ONCE(1);
  	return -EAFNOSUPPORT;
-diff --git a/net/xfrm/xfrm_policy.c b/net/xfrm/xfrm_policy.c
-index 2c42d83fbaa2..43c9182f71f0 100644
 --- a/net/xfrm/xfrm_policy.c
 +++ b/net/xfrm/xfrm_policy.c
 @@ -48,6 +48,11 @@
@@ -1755,7 +1721,7 @@ index 2c42d83fbaa2..43c9182f71f0 100644
  
  #define XFRM_QUEUE_TMO_MIN ((unsigned)(HZ/10))
  #define XFRM_QUEUE_TMO_MAX ((unsigned)(60*HZ))
-@@ -179,6 +184,11 @@ static struct xfrm_policy_afinfo const __rcu *xfrm_policy_afinfo[AF_INET6 + 1]
+@@ -179,6 +184,11 @@ static struct xfrm_policy_afinfo const _
  
  static struct kmem_cache *xfrm_dst_cache __ro_after_init;
  
@@ -1767,7 +1733,7 @@ index 2c42d83fbaa2..43c9182f71f0 100644
  static struct rhashtable xfrm_policy_inexact_table;
  static const struct rhashtable_params xfrm_pol_inexact_params;
  
-@@ -2590,7 +2600,11 @@ xfrm_tmpl_resolve(struct xfrm_policy **pols, int npols, const struct flowi *fl,
+@@ -2584,7 +2594,11 @@ xfrm_tmpl_resolve(struct xfrm_policy **p
  
  }
  
@@ -1779,7 +1745,7 @@ index 2c42d83fbaa2..43c9182f71f0 100644
  {
  	if (family == AF_INET)
  		return fl->u.ip4.flowi4_tos & INET_DSCP_MASK;
-@@ -2656,6 +2670,9 @@ static inline int xfrm_fill_dst(struct xfrm_dst *xdst, struct net_device *dev,
+@@ -2650,6 +2664,9 @@ static inline int xfrm_fill_dst(struct x
  
  	return err;
  }
@@ -1789,7 +1755,7 @@ index 2c42d83fbaa2..43c9182f71f0 100644
  
  
  /* Allocate chain of dst_entry's, attach known xfrm's, calculate
-@@ -3290,6 +3307,35 @@ struct dst_entry *xfrm_lookup_with_ifid(struct net *net,
+@@ -3284,6 +3301,35 @@ no_transform:
  		dst = dst_orig;
  	}
  
@@ -1825,7 +1791,7 @@ index 2c42d83fbaa2..43c9182f71f0 100644
  ok:
  	xfrm_pols_put(pols, drop_pols);
  	if (dst && dst->xfrm &&
-@@ -3847,6 +3893,31 @@ int __xfrm_policy_check(struct sock *sk, int dir, struct sk_buff *skb,
+@@ -3847,6 +3893,31 @@ int __xfrm_policy_check(struct sock *sk,
  			goto reject;
  		}
  
@@ -1854,10 +1820,10 @@ index 2c42d83fbaa2..43c9182f71f0 100644
 +#endif
 +#endif
 +
+ out:
  		xfrm_pols_put(pols, npols);
  		sp->verified_cnt = k;
- 
-@@ -4316,6 +4387,14 @@ static int __net_init xfrm_net_init(struct net *net)
+@@ -4321,6 +4392,14 @@ static int __net_init xfrm_net_init(stru
  	if (rv < 0)
  		goto out_sysctl;
  
@@ -1872,7 +1838,7 @@ index 2c42d83fbaa2..43c9182f71f0 100644
  	rv = xfrm_nat_keepalive_net_init(net);
  	if (rv < 0)
  		goto out_nat_keepalive;
-@@ -4323,6 +4402,12 @@ static int __net_init xfrm_net_init(struct net *net)
+@@ -4328,6 +4407,12 @@ static int __net_init xfrm_net_init(stru
  	return 0;
  
  out_nat_keepalive:
@@ -1885,7 +1851,7 @@ index 2c42d83fbaa2..43c9182f71f0 100644
  	xfrm_sysctl_fini(net);
  out_sysctl:
  	xfrm_policy_fini(net);
-@@ -4337,6 +4422,11 @@ static int __net_init xfrm_net_init(struct net *net)
+@@ -4342,6 +4427,11 @@ out_statistics:
  static void __net_exit xfrm_net_exit(struct net *net)
  {
  	xfrm_nat_keepalive_net_fini(net);
@@ -1897,11 +1863,9 @@ index 2c42d83fbaa2..43c9182f71f0 100644
  	xfrm_sysctl_fini(net);
  	xfrm_policy_fini(net);
  	xfrm_state_fini(net);
-diff --git a/net/xfrm/xfrm_state.c b/net/xfrm/xfrm_state.c
-index 6f99fd2d966c..9c29ae914e73 100644
 --- a/net/xfrm/xfrm_state.c
 +++ b/net/xfrm/xfrm_state.c
-@@ -58,6 +58,57 @@ static inline bool xfrm_state_hold_rcu(struct xfrm_state __rcu *x)
+@@ -58,6 +58,57 @@ static inline bool xfrm_state_hold_rcu(s
  	return refcount_inc_not_zero(&x->refcnt);
  }
  
@@ -1959,30 +1923,30 @@ index 6f99fd2d966c..9c29ae914e73 100644
  static inline unsigned int xfrm_dst_hash(struct net *net,
  					 const xfrm_address_t *daddr,
  					 const xfrm_address_t *saddr,
-@@ -114,12 +165,22 @@ static unsigned int xfrm_seq_hash(struct net *net, u32 seq)
+@@ -114,12 +165,22 @@ static unsigned int xfrm_seq_hash(struct
  			hlist_add_before_rcu(_n, &_x->by);                 \
  	}
  
 +#if defined(CONFIG_INET_IPSEC_OFFLOAD) || defined(CONFIG_INET6_IPSEC_OFFLOAD)
- static void xfrm_hash_transfer(struct hlist_head *list,
- 			       struct hlist_head *ndsttable,
- 			       struct hlist_head *nsrctable,
- 			       struct hlist_head *nspitable,
- 			       struct hlist_head *nseqtable,
-+			       struct hlist_head *nhtable,
- 			       unsigned int nhashmask)
-+#else
 +static void xfrm_hash_transfer(struct hlist_head *list,
 +			       struct hlist_head *ndsttable,
 +			       struct hlist_head *nsrctable,
 +			       struct hlist_head *nspitable,
 +			       struct hlist_head *nseqtable,
++			       struct hlist_head *nhtable,
 +			       unsigned int nhashmask)
++#else
+ static void xfrm_hash_transfer(struct hlist_head *list,
+ 			       struct hlist_head *ndsttable,
+ 			       struct hlist_head *nsrctable,
+ 			       struct hlist_head *nspitable,
+ 			       struct hlist_head *nseqtable,
+ 			       unsigned int nhashmask)
 +#endif
  {
  	struct hlist_node *tmp;
  	struct xfrm_state *x;
-@@ -150,6 +211,13 @@ static void xfrm_hash_transfer(struct hlist_head *list,
+@@ -150,6 +211,13 @@ static void xfrm_hash_transfer(struct hl
  			XFRM_STATE_INSERT(byseq, &x->byseq, nseqtable + h,
  					  x->xso.type);
  		}
@@ -1996,7 +1960,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  	}
  }
  
-@@ -162,6 +230,9 @@ static void xfrm_hash_resize(struct work_struct *work)
+@@ -162,6 +230,9 @@ static void xfrm_hash_resize(struct work
  {
  	struct net *net = container_of(work, struct net, xfrm.state_hash_work);
  	struct hlist_head *ndst, *nsrc, *nspi, *nseq, *odst, *osrc, *ospi, *oseq;
@@ -2006,7 +1970,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  	unsigned long nsize, osize;
  	unsigned int nhashmask, ohashmask;
  	int i;
-@@ -188,6 +259,16 @@ static void xfrm_hash_resize(struct work_struct *work)
+@@ -188,6 +259,16 @@ static void xfrm_hash_resize(struct work
  		xfrm_hash_free(nspi, nsize);
  		return;
  	}
@@ -2023,7 +1987,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  
  	spin_lock_bh(&net->xfrm.xfrm_state_lock);
  	write_seqcount_begin(&net->xfrm.xfrm_state_hash_generation);
-@@ -195,17 +276,27 @@ static void xfrm_hash_resize(struct work_struct *work)
+@@ -195,17 +276,27 @@ static void xfrm_hash_resize(struct work
  	nhashmask = (nsize / sizeof(struct hlist_head)) - 1U;
  	odst = xfrm_state_deref_prot(net->xfrm.state_bydst, net);
  	for (i = net->xfrm.state_hmask; i >= 0; i--)
@@ -2051,7 +2015,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  	net->xfrm.state_hmask = nhashmask;
  
  	write_seqcount_end(&net->xfrm.xfrm_state_hash_generation);
-@@ -219,6 +310,9 @@ static void xfrm_hash_resize(struct work_struct *work)
+@@ -219,6 +310,9 @@ static void xfrm_hash_resize(struct work
  	xfrm_hash_free(osrc, osize);
  	xfrm_hash_free(ospi, osize);
  	xfrm_hash_free(oseq, osize);
@@ -2061,7 +2025,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  }
  
  static DEFINE_SPINLOCK(xfrm_state_afinfo_lock);
-@@ -680,6 +774,9 @@ struct xfrm_state *xfrm_state_alloc(struct net *net)
+@@ -682,6 +776,9 @@ struct xfrm_state *xfrm_state_alloc(stru
  		INIT_HLIST_NODE(&x->bysrc);
  		INIT_HLIST_NODE(&x->byspi);
  		INIT_HLIST_NODE(&x->byseq);
@@ -2071,7 +2035,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  		hrtimer_init(&x->mtimer, CLOCK_BOOTTIME, HRTIMER_MODE_ABS_SOFT);
  		x->mtimer.function = xfrm_timer_handler;
  		timer_setup(&x->rtimer, xfrm_replay_timer_handler, 0);
-@@ -690,6 +787,16 @@ struct xfrm_state *xfrm_state_alloc(struct net *net)
+@@ -692,6 +789,16 @@ struct xfrm_state *xfrm_state_alloc(stru
  		x->lft.hard_packet_limit = XFRM_INF;
  		x->replay_maxage = 0;
  		x->replay_maxdiff = 0;
@@ -2088,10 +2052,10 @@ index 6f99fd2d966c..9c29ae914e73 100644
  		x->pcpu_num = UINT_MAX;
  		spin_lock_init(&x->lock);
  	}
-@@ -769,6 +876,24 @@ int __xfrm_state_delete(struct xfrm_state *x)
+@@ -766,6 +873,24 @@ int __xfrm_state_delete(struct xfrm_stat
  
- 		if (x->id.spi)
- 			hlist_del_rcu(&x->byspi);
+ 		if (!hlist_unhashed(&x->byspi))
+ 			hlist_del_init_rcu(&x->byspi);
 +#if defined(CONFIG_INET_IPSEC_OFFLOAD) || defined(CONFIG_INET6_IPSEC_OFFLOAD)
 +		/*
 +		 * The SA is going away: stop the datapath from treating it as
@@ -2113,7 +2077,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  		net->xfrm.state_num--;
  		xfrm_nat_keepalive_state_updated(x);
  		spin_unlock(&net->xfrm.xfrm_state_lock);
-@@ -1521,6 +1646,15 @@ xfrm_state_find(const xfrm_address_t *daddr, const xfrm_address_t *saddr,
+@@ -1524,6 +1649,15 @@ found:
  						  net->xfrm.state_byseq + h,
  						  x->xso.type);
  			}
@@ -2129,7 +2093,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  			x->lft.hard_add_expires_seconds = net->xfrm.sysctl_acq_expires;
  			hrtimer_start(&x->mtimer,
  				      ktime_set(net->xfrm.sysctl_acq_expires, 0),
-@@ -1691,6 +1825,15 @@ static void __xfrm_state_insert(struct xfrm_state *x)
+@@ -1694,6 +1828,15 @@ static void __xfrm_state_insert(struct x
  				  x->xso.type);
  	}
  
@@ -2145,7 +2109,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  	hrtimer_start(&x->mtimer, ktime_set(1, 0), HRTIMER_MODE_REL_SOFT);
  	if (x->replay_maxage)
  		mod_timer(&x->rtimer, jiffies + x->replay_maxage);
-@@ -1712,6 +1855,9 @@ static void __xfrm_state_bump_genids(struct xfrm_state *xnew)
+@@ -1715,6 +1858,9 @@ static void __xfrm_state_bump_genids(str
  	u32 mark = xnew->mark.v & xnew->mark.m;
  	u32 if_id = xnew->if_id;
  	u32 cpu_id = xnew->pcpu_num;
@@ -2155,7 +2119,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  
  	h = xfrm_dst_hash(net, &xnew->id.daddr, &xnew->props.saddr, reqid, family);
  	hlist_for_each_entry(x, net->xfrm.state_bydst+h, bydst) {
-@@ -1722,8 +1868,19 @@ static void __xfrm_state_bump_genids(struct xfrm_state *xnew)
+@@ -1725,8 +1871,19 @@ static void __xfrm_state_bump_genids(str
  		    (mark & x->mark.m) == x->mark.v &&
  		    xfrm_addr_equal(&x->id.daddr, &xnew->id.daddr, family) &&
  		    xfrm_addr_equal(&x->props.saddr, &xnew->props.saddr, family))
@@ -2175,7 +2139,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  }
  
  void xfrm_state_insert(struct xfrm_state *x)
-@@ -2263,6 +2420,36 @@ xfrm_state_lookup_byaddr(struct net *net, u32 mark,
+@@ -2272,6 +2429,36 @@ xfrm_state_lookup_byaddr(struct net *net
  }
  EXPORT_SYMBOL(xfrm_state_lookup_byaddr);
  
@@ -2212,7 +2176,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  struct xfrm_state *
  xfrm_find_acq(struct net *net, const struct xfrm_mark *mark, u8 mode, u32 reqid,
  	      u32 if_id, u32 pcpu_num, u8 proto, const xfrm_address_t *daddr,
-@@ -2510,6 +2697,16 @@ int xfrm_alloc_spi(struct xfrm_state *x, u32 low, u32 high,
+@@ -2521,6 +2708,16 @@ int xfrm_alloc_spi(struct xfrm_state *x,
  			x->id.spi = newspi;
  			h = xfrm_spi_hash(net, &x->id.daddr, newspi, x->id.proto, x->props.family);
  			XFRM_STATE_INSERT(byspi, &x->byspi, net->xfrm.state_byspi + h, x->xso.type);
@@ -2229,7 +2193,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  			spin_unlock_bh(&net->xfrm.xfrm_state_lock);
  			err = 0;
  			goto unlock;
-@@ -3184,6 +3381,19 @@ int __net_init xfrm_state_init(struct net *net)
+@@ -3207,6 +3404,19 @@ int __net_init xfrm_state_init(struct ne
  	if (!net->xfrm.state_byseq)
  		goto out_byseq;
  
@@ -2249,7 +2213,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  	net->xfrm.state_cache_input = alloc_percpu(struct hlist_head);
  	if (!net->xfrm.state_cache_input)
  		goto out_state_cache_input;
-@@ -3198,6 +3408,10 @@ int __net_init xfrm_state_init(struct net *net)
+@@ -3221,6 +3431,10 @@ int __net_init xfrm_state_init(struct ne
  	return 0;
  
  out_state_cache_input:
@@ -2260,7 +2224,7 @@ index 6f99fd2d966c..9c29ae914e73 100644
  	xfrm_hash_free(net->xfrm.state_byseq, sz);
  out_byseq:
  	xfrm_hash_free(net->xfrm.state_byspi, sz);
-@@ -3228,6 +3442,10 @@ void xfrm_state_fini(struct net *net)
+@@ -3251,6 +3465,10 @@ void xfrm_state_fini(struct net *net)
  	xfrm_hash_free(net->xfrm.state_bysrc, sz);
  	WARN_ON(!hlist_empty(net->xfrm.state_bydst));
  	xfrm_hash_free(net->xfrm.state_bydst, sz);
@@ -2271,11 +2235,9 @@ index 6f99fd2d966c..9c29ae914e73 100644
  	free_percpu(net->xfrm.state_cache_input);
  }
  
-diff --git a/net/xfrm/xfrm_user.c b/net/xfrm/xfrm_user.c
-index d41e5642625e..0f8543738ab2 100644
 --- a/net/xfrm/xfrm_user.c
 +++ b/net/xfrm/xfrm_user.c
-@@ -1067,6 +1067,10 @@ static void copy_to_user_state(struct xfrm_state *x, struct xfrm_usersa_info *p)
+@@ -1070,6 +1070,10 @@ static void copy_to_user_state(struct xf
  	if (x->xso.dev)
  		xfrm_dev_state_update_stats(x);
  	memcpy(&p->curlft, &x->curlft, sizeof(p->curlft));
@@ -2286,6 +2248,3 @@ index d41e5642625e..0f8543738ab2 100644
  	put_unaligned(x->stats.replay_window, &p->stats.replay_window);
  	put_unaligned(x->stats.replay, &p->stats.replay);
  	put_unaligned(x->stats.integrity_failed, &p->stats.integrity_failed);
--- 
-2.47.3
-

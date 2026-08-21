@@ -475,12 +475,17 @@ define Device/mono_gateway-dk
   # ASU ImageBuilder installs only DEVICE_PACKAGES (+ target/global DEFAULT_PACKAGES)
   # and IGNORES the seed's CONFIG_PACKAGE_x=y, so a seed-only package is absent from
   # owut rebuilds.
-  DEVICE_PACKAGES := kmod-ask-cdx kmod-ask-fci kmod-ask-auto-bridge \
-	cmm cmmqos dpa-app fmc \
+  # SDK-only staging (CPE_FAST_PATH=n): the ASK offload control stack needs the
+  # fast-path kernel hooks, so it is dropped here. fmc (FMan config) is SDK-level
+  # and stays. Wi-Fi is also dropped: the nxp-mwifiex / mac80211 backports do not
+  # build on 6.12.103 yet (WIP, separate from the SDK port; the router has no card).
+  # RE-ADD for the full ASK image:
+  #   kmod-ask-cdx kmod-ask-fci kmod-ask-auto-bridge cmm cmmqos dpa-app
+  #   kmod-nxp-mwifiex nxp-wifi-firmware-9098-pcie wpad-openssl iw usteer luci-app-usteer
+  DEVICE_PACKAGES := fmc \
 	kmod-leds-lp5812 kmod-sfp-led fancontrol lm-sensors irqbalance \
 	kmod-i2c-core kmod-hwmon-core kmod-hwmon-ina2xx kmod-hwmon-lm90 \
 	kmod-regmap-core kmod-regmap-i2c i2csfp i2c-tools usbutils pciutils \
-	kmod-nxp-mwifiex nxp-wifi-firmware-9098-pcie wpad-openssl iw usteer luci-app-usteer \
 	luci-light libustream-mbedtls px5g-mbedtls -luci-app-package-manager \
 	ip-full ethtool-full tcpdump telnet-bsd \
 	strongswan strongswan-default strongswan-mod-openssl openvpn-openssl luci-app-openvpn \

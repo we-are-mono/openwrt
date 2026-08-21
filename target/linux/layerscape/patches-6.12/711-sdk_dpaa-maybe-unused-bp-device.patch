@@ -1,0 +1,21 @@
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Thu, 21 Aug 2025 12:00:00 +0000
+Subject: [PATCH] sdk_dpaa: mark dpa_get_bp_device __maybe_unused
+
+dpa_get_bp_device() is only called from the SEC inbound path, which is compiled
+out when CPE_FAST_PATH (fast-path offload) is disabled. Mark it __maybe_unused
+so a fast-path-off (SDK-only) build does not trip -Werror=unused-function.
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+--- a/drivers/net/ethernet/freescale/sdk_dpaa/dpaa_eth_sg.c
++++ b/drivers/net/ethernet/freescale/sdk_dpaa/dpaa_eth_sg.c
+@@ -1055,7 +1055,7 @@
+ struct dpa_bp *skb_2bfreed_bpool_g; //if no recyclable skbs exist in skb fraglist, those should be freed back, SEC engine will add to this bman pool
+ EXPORT_SYMBOL(skb_2bfreed_bpool_g);
+ 
+-static struct device* dpa_get_bp_device(void)
++static struct device __maybe_unused *dpa_get_bp_device(void)
+ {
+ 	if (skb_2bfreed_bpool_g)
+ 		return skb_2bfreed_bpool_g->dev;
