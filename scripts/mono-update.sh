@@ -22,7 +22,7 @@
 set -eu
 
 cd "$(dirname "$0")/.."
-BRANCH=mono
+BRANCH=$(git branch --show-current)
 DRY_RUN=""
 FORCE=""
 FREEZE_FEEDS=""
@@ -34,10 +34,11 @@ for a in "$@"; do
 	esac
 done
 
-[ "$(git branch --show-current)" = "$BRANCH" ] || {
-	echo "mono-update: not on branch $BRANCH, refusing" >&2
-	exit 1
-}
+case "$BRANCH" in
+	mono-v*) ;;
+	*)	echo "mono-update: not on a mono-v* release branch (on '$BRANCH'), refusing" >&2
+		exit 1 ;;
+esac
 [ -z "$(git status --porcelain)" ] || {
 	echo "mono-update: working tree not clean, refusing" >&2
 	exit 1

@@ -12,7 +12,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 RELTAG=${1:?usage: mono-publish-release.sh <mono-vX.Y.Z-rN>}
-BRANCH=mono
+BRANCH=$(printf '%s\n' "$RELTAG" | sed -E 's/\.[0-9]+-r[0-9]+$//')
 OUT="releases/$RELTAG"
 
 [ -d "$OUT" ]                   || { echo "mono-publish: $OUT not staged - build it first" >&2; exit 1; }
