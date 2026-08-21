@@ -20,6 +20,9 @@ DATA_DEV=/dev/mmcblk0p5
 }
 
 mkdir -p /data
+# Give the mountpoint the media.file label (selinux-policy stockfixes.cil) so
+# block-mount can getattr/mounton it on every remount; persists on the rootfs.
+restorecon /data 2>/dev/null || true
 
 # Format once. Detect "already formatted" by trying to mount it - not with
 # block/blkid, so this never depends on an optional tool. lazy_*_init keeps the

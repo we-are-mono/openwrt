@@ -523,3 +523,21 @@
 ;; default conf.file (searchable); only the file needs the private type.
 (in envtools.conf
     (filecon "/etc/fw_env\.d/emmc" file file_context))
+
+;; ===========================================================================
+;; mono A/B — label the persistent /data mountpoint so block can mount it
+;; ===========================================================================
+;; Denials: dir unknown.file { getattr mounton } for comm="block" path="/data".
+;; block-mount (block.mount.subj) remounts the persistent /data partition (p5)
+;; on every boot via the mono_data fstab entry. The /data mountpoint dir lives
+;; on the rootfs, created at first boot by uci-defaults (11-mono-gateway-data)
+;; as the default unknown.file, which block.mount cannot getattr/mounton. Give
+;; it the media.file label: block.mount already manages + mounts on media dirs
+;; (.media.manage_file_dirs / .media.mounton_file_dirs in blockmountsysagent),
+;; the same type dssp uses for /mnt and documents for extroot mountpoints — so
+;; both denials close with no new allow. Contents stay unlabeled here (any ()):
+;; they belong to the mounted p5 ext4 (seclabel), not this rootfs fcontext. The
+;; uci-default restorecons /data after mkdir so the label persists on the rootfs.
+(in media
+    (filecon "/data" dir file_context)
+    (filecon "/data/.*" any ()))
