@@ -74,17 +74,15 @@ else
 	fi
 fi
 
-# Next release number: highest existing -rN plus one. Release numbers are BASED AT 50000
-# so the git tag == the image's version_code (see the stamp below) and both exceed the
-# pre-stamp getver constant (r33051) that owut compares against - one number everywhere,
-# no split to reason about. Bridge the legacy bare-counter tags (r1..r9) into the 50000
-# base once (r9 -> 50009 -> r50010); after that it is just +1 (r50010 -> r50011).
-LAST=$(git tag -l "mono-$LATEST-r*" | sed 's/.*-r//' | sort -n | tail -1)
-LAST=${LAST:-0}
-[ "$LAST" -lt 50000 ] && LAST=$(( LAST + 50000 ))
-RN=$(( LAST + 1 ))
-RELTAG="mono-$LATEST-r$RN"
-echo "mono-update: release $RELTAG"
+# Next release number: the release commit's committer epoch - git log -1 --format=%ct.
+# Monotonic by time, stateless (no counter to carry forward), one scheme across every repo.
+# The real N is read from the FINAL (post-rebase) HEAD just before tagging; here we preview
+# it from the current HEAD for --dry-run. LASTN = highest published N across ALL releases
+# (any base) - the fleet-ordering floor the guard below enforces. (Supersedes the old
+# highest-tag+1 counter and its +50000 stamp offset; any epoch N is far above the r5001x
+# tail, so the crossover is a clean forward jump.)
+LASTN=$(git tag -l 'mono-v*-r*' | sed 's/.*-r//' | grep -E '^[0-9]+$' | sort -n | tail -1); LASTN=${LASTN:-0}
+echo "mono-update: release mono-$LATEST-r$(git log -1 --format=%ct "$BRANCH")"
 [ -n "$DRY_RUN" ] && exit 0
 
 if [ "$LATEST" != "$BASE" ]; then
@@ -95,6 +93,17 @@ if [ "$LATEST" != "$BASE" ]; then
 		exit 1
 	fi
 fi
+
+# Final release number from the (possibly rebased) HEAD's committer epoch, guarded so it
+# can only move forward: if the clock skewed or a commit was backdated at or below the last
+# published N, refuse the cut rather than ship the fleet a version-code "downgrade".
+RN=$(git log -1 --format=%ct)
+if [ "$RN" -le "$LASTN" ]; then
+	echo "mono-update: REFUSING - committer epoch r$RN <= last published r$LASTN (clock/history moved backwards)" >&2
+	exit 1
+fi
+RELTAG="mono-$LATEST-r$RN"
+echo "mono-update: cutting $RELTAG"
 
 # Tag before building so the release is a fixed point in git history; the feed
 # dir + latest.json are named from it. Dropped again on failure.
