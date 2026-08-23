@@ -512,15 +512,9 @@ define Device/mono_gateway-dk
   # appending it still report mono,gateway-dk-sdboot at runtime, and sysupgrade
   # refuses an image whose SUPPORTED_DEVICES lacks the running board name.
   SUPPORTED_DEVICES := mono,gateway-dk mono,gateway-dk-sdboot
-  IMAGES := emmc.img.gz sysupgrade.bin sysupgrade-legacy.bin
+  IMAGES := emmc.img.gz sysupgrade.bin
   IMAGE/emmc.img.gz := mono-bootfs | mono-emmc-img | gzip | append-metadata
   IMAGE/sysupgrade.bin := mono-bootfs | mono-sysupgrade | gzip | append-metadata
-  # Same tar, uncompressed: firmware that predates the gzip-capable flash
-  # path cannot read sysupgrade.bin, so latest.json keeps advertising this
-  # one under "sysupgrade" (old clients) and the gzipped one under
-  # "sysupgrade_gz". Drop it only once no deployed device predates gzip
-  # support - a straggler waking up after months still needs it.
-  IMAGE/sysupgrade-legacy.bin := mono-bootfs | mono-sysupgrade | append-metadata
 endef
 TARGET_DEVICES += mono_gateway-dk
 

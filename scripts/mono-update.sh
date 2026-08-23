@@ -193,9 +193,15 @@ mkdir -p "$OUT"
 # Prefix-agnostic (openwrt-/mono-/...): the image prefix comes from VERSION_DIST,
 # which the seed sets to "Mono" (artifacts are mono-*). rm -rf "$BINDIR" above means
 # only THIS build's files are present, so the leading * cannot catch strays.
-cp "$BINDIR"/*-layerscape-armv8_64b-mono_*-ext4-emmc.img.gz \
-   "$BINDIR"/*-layerscape-armv8_64b-mono_*-ext4-sysupgrade*.bin \
-   "$BINDIR"/*-layerscape-armv8_64b-mono_*.manifest "$OUT/"
+# Stage under simplified names: strip the version prefix (mono-<epoch>-<sha>-)
+# so published files are just layerscape-armv8_64b-mono_gateway-dk-*. The strip
+# is mirrored into the latest.json builder below (pick()), which resolves
+# profiles.json's build-names against these staged names.
+for f in "$BINDIR"/*-layerscape-armv8_64b-mono_*-ext4-emmc.img.gz \
+         "$BINDIR"/*-layerscape-armv8_64b-mono_*-ext4-sysupgrade.bin \
+         "$BINDIR"/*-layerscape-armv8_64b-mono_*.manifest; do
+	cp "$f" "$OUT/$(basename "$f" | sed -E 's/^.*(layerscape-armv8_64b-)/\1/')"
+done
 
 # Per-release kmod feed: kernel modules are vermagic-locked to this build, so
 # devices cannot get them from the official OpenWrt repo. The device's
@@ -209,15 +215,6 @@ git format-patch --quiet -o "$OUT/patches" "$LATEST..$BRANCH"
 # here (reproduce with: apply these pins, `./scripts/feeds update`, rebuild).
 grep -E '^src-' feeds.conf.default > "$OUT/feeds.lock"
 (cd "$OUT" && sha256sum *.img.gz *.bin > sha256sums)
-
-# The uncompressed legacy artifact is the only image pre-gzip devices can
-# install; a release without one strands them one failed flash per release.
-# Retiring it must be a deliberate act, not a recipe accident: require
-# MONO_ALLOW_NO_LEGACY=1 for the release that drops it.
-[ -n "$(ls "$OUT"/*-sysupgrade-legacy.bin 2>/dev/null)" ] || [ -n "${MONO_ALLOW_NO_LEGACY:-}" ] || {
-	echo "mono-update: no sysupgrade-legacy.bin staged and MONO_ALLOW_NO_LEGACY unset - refusing" >&2
-	exit 1
-}
 
 # NOTE: this script no longer signs. Signing happens on the key host via
 # scripts/mono-sign-release.sh, and publishing (scripts/mono-publish-release.sh)
@@ -239,46 +236,12 @@ sync; echo "Done - set DIP to eMMC and reboot."
 FLASH
 chmod +x "$OUT/flash-mono-gateway.sh"
 
-# latest.json: board keys come from the image metadata (profiles.json),
-# not filename string-surgery, so a device that finds no image for its
-# board fails visibly rather than from a silent naming drift.
-# Two formats per board: "sysupgrade"/"sha256" must ALWAYS point at an
-# image the oldest deployed flasher can install (the uncompressed
-# -legacy artifact while one is built), because pre-gzip clients read
-# only those keys. Gzip-capable clients prefer "sysupgrade_gz"/
-# "sha256_gz". When the legacy artifact is retired, "sysupgrade" falls
-# back to the gzipped image and the _gz keys disappear - new clients
-# handle that, old ones are past support at that point by definition.
-python3 - "$RELTAG" "$URLBASE" "$OUT" "$BINDIR/profiles.json" \
-	> releases/latest.json <<'PY'
-import json, sys, os, hashlib, datetime
-reltag, urlbase, out, profiles = sys.argv[1:5]
-prof = json.load(open(profiles)).get("profiles", {})
-devices = {}
-def pick(p, suffix):
-    return next((im["name"] for im in p.get("images", [])
-                 if im.get("name", "").endswith(suffix)
-                 and os.path.exists(os.path.join(out, im["name"]))), None)
-def sha(img):
-    return hashlib.sha256(open(os.path.join(out, img), "rb").read()).hexdigest()
-for name, p in prof.items():
-    boards = p.get("supported_devices") or []
-    img_gz = pick(p, "sysupgrade.bin")
-    img_legacy = pick(p, "sysupgrade-legacy.bin")
-    if not boards or not (img_gz or img_legacy):
-        continue
-    legacy = img_legacy or img_gz
-    entry = {"sysupgrade": f"{urlbase}/{reltag}/{legacy}", "sha256": sha(legacy)}
-    if img_gz and img_legacy:
-        entry["sysupgrade_gz"] = f"{urlbase}/{reltag}/{img_gz}"
-        entry["sha256_gz"] = sha(img_gz)
-    devices[boards[0]] = entry
-# format_version lets the client reject a manifest shape it doesn't understand.
-json.dump({"format_version": 1,
-           "tag": reltag,
-           "date": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-           "devices": devices}, sys.stdout, indent=2)
-PY
+# latest.json: the manifest devices poll to self-update. Board keys come from
+# the image metadata (profiles.json), not filename string-surgery, so a device
+# that finds no image for its board fails visibly rather than from silent
+# naming drift. Format + rationale live in scripts/mono-latest-json.py.
+scripts/mono-latest-json.py "$RELTAG" "$URLBASE" "$OUT" "$BINDIR/profiles.json" \
+	> releases/latest.json
 
 # Release it. On the nightly patch-release host the signing key is present, so
 # sign + publish run automatically. mono-publish-release.sh re-verifies both
