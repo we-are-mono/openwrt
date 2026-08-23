@@ -12,7 +12,10 @@ set -eu
 
 cd "$(dirname "$0")/.."
 RELTAG=${1:?usage: mono-publish-release.sh <mono-vX.Y.Z-rN>}
-BRANCH=$(printf '%s\n' "$RELTAG" | sed -E 's/\.[0-9]+-r[0-9]+$//')
+# The trunk to push. One 'mono' trunk by default; set MONO_PUBLISH_BRANCH to
+# push an on-demand archive line (mono-v25.12) instead. The base version rides
+# in $RELTAG regardless of branch name.
+BRANCH=${MONO_PUBLISH_BRANCH:-mono}
 OUT="releases/$RELTAG"
 
 [ -d "$OUT" ]                   || { echo "mono-publish: $OUT not staged - build it first" >&2; exit 1; }

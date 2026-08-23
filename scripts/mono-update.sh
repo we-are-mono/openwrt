@@ -35,8 +35,8 @@ for a in "$@"; do
 done
 
 case "$BRANCH" in
-	mono-v*) ;;
-	*)	echo "mono-update: not on a mono-v* release branch (on '$BRANCH'), refusing" >&2
+	mono|mono-v*) ;;
+	*)	echo "mono-update: not on the 'mono' trunk or a mono-v* archive line (on '$BRANCH') - refusing" >&2
 		exit 1 ;;
 esac
 [ -z "$(git status --porcelain)" ] || {

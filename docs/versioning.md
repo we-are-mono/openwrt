@@ -7,28 +7,36 @@ wrong axis onto any one project.
 
 ## Principle: consistency is in the grammar, not the value
 
-Every repo uses the same **shape** — `mono-<axis>` for a branch, `mono-<axis>-rN` for a
-release — but `<axis>` is whatever that project is *naturally* versioned by. Same prefix +
-same grammar → recognizable across repos; per-project axis → honest about what actually
-diverges. Don't force the same *value* (`6.12`) into every name.
+Every repo shares the `mono-` prefix and the `…-rN` release grammar, but the branch shape
+follows how the project actually evolves. A **ported** repo (kernel fork · ASK · drivers) is
+re-based per kernel line, so its branch carries the axis: `mono-<axis>` (`mono-6.12`). A
+**rolling** repo (OpenWrt) advances one long-lived trunk in place, so its branch is bare
+`mono` and the version lives in the *tag*. Same prefix + same tag grammar → recognizable
+across repos; per-project branch shape → honest about what actually diverges. Don't force the
+same *value* (`6.12`) into every name.
 
 ## Anchor each repo to its primary axis
 
 | Repo kind | Diverges on | Branch | Release tag |
 |---|---|---|---|
 | kernel fork · ASK · drivers | kernel minor | `mono-6.12`, `mono-6.18` | `mono-6.12-r1` |
-| **OpenWrt** | OpenWrt release line | `mono-v25.12` | `mono-v25.12.5-r50012` |
+| **OpenWrt** | OpenWrt release line | `mono` (single rolling trunk) | `mono-v25.12.5-r<epoch>` |
 
-Kernel-coupled repos: a new kernel is a new port, so a new branch. OpenWrt: the axis of
-divergence is the OpenWrt **release line** — the kernel just rides *inside* the image, so
-it must not drive the OpenWrt name.
+Kernel-coupled repos: a new kernel is a new port, so a new branch. OpenWrt: the release line
+it tracks advances *in place* on one `mono` trunk — the kernel just rides *inside* the image,
+so it never drives a branch name, and the OpenWrt base line is recorded in the tag, not the
+branch.
 
 ## OpenWrt rules
 
-- **Branch = the minor line, not the patch.** `mono-v25.12` tracks upstream
-  `openwrt-25.12`. Point releases (`.5 → .6 → .7`) are **tags on that branch** — rebase
-  the branch onto the new `v25.12.x` tag and tag it; never a new branch. A **new branch**
-  only on a **minor** bump (`mono-v25.12 → mono-v26.03`).
+- **One rolling trunk: `mono`.** It tracks whichever upstream `openwrt-<line>` we've adopted
+  (today `openwrt-25.12`). Point releases (`.5 → .6 → .7`) are **tags on `mono`** — rebase
+  `mono` onto the new `v25.12.x` tag and tag it; never a new branch.
+- **Minor/major bumps happen in place.** Moving to a new upstream line (`25.12 → 26.03`) is a
+  deliberate, eyes-open migration done **on `mono`** — never followed unattended. We do
+  **not** pre-create per-line branches. Only if we ever actually need to keep patching a
+  superseded line do we branch `mono-v25.12` off **at that moment** to archive it; per-minor
+  branches are an on-demand escape hatch, not the default.
 - **`-rN` = the release commit's committer epoch** — `git log -1 --format=%ct` (e.g.
   `r1755800000`). Monotonic by time, stateless (no tag lookup or counter to maintain), and
   computed identically in every repo. It feeds owut's version-code ordering, so the cut
@@ -38,20 +46,21 @@ it must not drive the OpenWrt name.
   Supersedes the old highest-tag+1 counter; the `r5001x` sequence ended at **r50012**, and
   any epoch N ≫ 50012, so the crossover is a clean forward jump (also drops the legacy
   `+50000` stamp offset).
-- **One axis in the name.** `mono-v25.12`, never `mono-v25.12-6.12`. The kernel / ASK
-  versions for an image live in metadata (below), not the name.
+- **The version lives in the tag, not the branch.** The branch is bare `mono`; the OpenWrt
+  base line rides in the release tag `mono-v<base>-rN` and the image metadata, never in the
+  branch name.
 
 ```
-branch  mono-v25.12                     ← tracks openwrt-25.12
+branch  mono                            ← the single rolling trunk (tracks openwrt-25.12 today)
   ├ tag mono-v25.12.5-r50012            (last of the old sequential Ns)
-  ├ tag mono-v25.12.6-r<epoch>          (.6 lands: rebase branch + tag; same branch)
-  └ tag mono-v25.12.7-r<epoch>
-branch  mono-v26.03                     ← only on a MINOR bump
-  └ tag mono-v26.03.0-r<epoch>          (N = committer epoch, always larger)
+  ├ tag mono-v25.12.6-r<epoch>          (.6 lands: rebase mono + tag)
+  ├ tag mono-v25.12.7-r<epoch>
+  └ tag mono-v26.03.0-r<epoch>          (26.03 migration: same trunk, base rides in the tag)
+(branch mono-v25.12                      ← created ONLY on demand, to keep patching an old line)
 ```
 
-The `v` is kept (consistent with OpenWrt's own `v25.12.5` version tags); the branch drops
-the patch component (`mono-v25.12`, not `mono-v25.12.5`).
+The tag keeps the `v` (consistent with OpenWrt's own `v25.12.5` tags) and the full
+`base.patch` the trunk was rebased onto; the branch itself carries no version at all.
 
 ## Git identity vs OpenWrt version (they differ on purpose)
 
@@ -84,8 +93,8 @@ That is the single place to answer "what is in this image" without polluting any
 
 ## Tooling
 
-`scripts/mono-update.sh` and `scripts/mono-publish-release.sh` derive the release branch
-from the `mono-v*` pattern (the branch you are on / the tag being published), so a new
-OpenWrt minor line needs **no script edits** — just branch `mono-v<minor>` off the previous
-line and cut. The release tag is `mono-<newest merged v-tag>-r<git log -1 --format=%ct>`,
-guarded so the new N must exceed the last published one.
+`scripts/mono-update.sh` and `scripts/mono-publish-release.sh` operate on the `mono` trunk;
+the release tag's base comes from the newest upstream `v*` tag **merged into the branch**
+(`mono-<that tag>-r<git log -1 --format=%ct>`), independent of the branch name and guarded so
+the new N must exceed the last published one. A minor migration therefore needs **no script
+edits** — it happens on `mono`, and the new base flows in from the merged upstream tag.
