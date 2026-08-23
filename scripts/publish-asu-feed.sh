@@ -1,5 +1,5 @@
 #!/bin/bash
-# Publish a release to the self-hosted ASU server (groot) so owut / attended-sysupgrade
+# Publish a release to the self-hosted ASU server so owut / attended-sysupgrade
 # offers it. Called BY mono-update.sh at release time, and FAIL-CLOSED: the release is
 # not "done" until the ASU /api/v1/revision endpoint reports the EXACT version_code we
 # just built - so the ASU server can never silently drift from the published release.
@@ -15,11 +15,13 @@
 # profiles.json, so the revision endpoint stayed stale while the IB/builds were current.
 #
 # Needs: the built IB tarball + profiles.json (run AFTER make target/imagebuilder/install)
-# and root SSH to groot (ships the feed under /srv/asu-feed and drives asu's rootless
+# and root SSH to the ASU host (ships the feed under /srv/asu-feed and drives asu's rootless
 # podman: rebuild the IB container, flush the build cache).
 set -eu
 
-GROOT=${GROOT:-root@45.137.48.13}
+# ASU host: default to the publish dest's host (root@<host>) so no IP is hardcoded here.
+# Override with GROOT=user@host; MONO_PUBLISH_DEST is set by the cut's env (mono@<host>).
+GROOT=${GROOT:-root@${MONO_PUBLISH_DEST##*@}}
 ASU_URL=${ASU_URL:-https://sysupgrade.mono.si}
 TARGET=${ASU_TARGET:-layerscape/armv8_64b}
 ARCH=${ASU_ARCH:-aarch64_generic}
