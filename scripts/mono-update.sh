@@ -169,7 +169,17 @@ cp configs/mono_gateway-dk.seed .config
 REVCODE="r$RN-$(git rev-parse --short HEAD)"
 echo "$REVCODE" > version
 echo "CONFIG_VERSION_CODE=\"$REVCODE\"" >> .config
-echo "mono-update: stamping revision $REVCODE"
+
+# owut filters "-SNAPSHOT" versions out of its upgrade list, so version.mk's default
+# ("25.12-SNAPSHOT") is never owut-upgradeable. Stamp the concrete upstream base instead
+# ($LATEST minus the 'v', e.g. 25.12.5) as VERSION_NUMBER, and point VERSION_REPO at the
+# same release: the ImageBuilder's repositories then reference releases/<version>/, which
+# publish-asu-feed reads to place the ASU feed under that release branch (the one owut
+# actually upgrades within). Both survive `make defconfig` via the seed's VERSIONOPT gate.
+VNUM=${LATEST#v}
+echo "CONFIG_VERSION_NUMBER=\"$VNUM\"" >> .config
+echo "CONFIG_VERSION_REPO=\"https://downloads.openwrt.org/releases/$VNUM\"" >> .config
+echo "mono-update: stamping revision $REVCODE, version $VNUM"
 
 # Build inside the pinned Nix FHS env (flake.nix) so the toolchain is identical
 # on every machine. Use `nix run` -- NOT `nix develop -c` / `nix-shell --run`,
