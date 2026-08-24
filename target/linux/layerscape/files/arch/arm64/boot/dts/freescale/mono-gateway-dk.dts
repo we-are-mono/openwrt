@@ -1,10 +1,38 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /*
- * Device Tree file for Freescale Layerscape-1046A family SoC.
+ * Device Tree file for Mono Gateway DK (NXP LS1046A).
  *
- * Copyright 2025 Mono Technologies Inc.
+ * Copyright 2026 Mono Technologies Inc.
  *
  * Author: Tomaz Zaman <tomaz@mono.si>
+ *
+ * CANONICAL SOURCE. This is the single authoritative Mono Gateway DK
+ * board device tree, owned by the ASK repository. Every downstream
+ * consumer (OpenWrt, Armbian, meta-ask, meta-mono, NixOS, U-Boot) must
+ * sync FROM this file rather than keep a private drifted copy.
+ *
+ * What lives where:
+ *   - Board hardware (i2c muxes/sensors, SFP cages + LEDs, GPIO hogs,
+ *     MAC<->PHY<->SFP wiring, QSPI flash) is defined here and is
+ *     identical for every consumer -- do not fork it.
+ *   - The DPAA/FMan offload configuration (the /cpus fman0-extended-args
+ *     subtree, the &fman0 OH-port cell-index overrides, and the &fsldpaa
+ *     MAC map) is also board-invariant and offload-load-bearing. The
+ *     extended-args cell-index values are coupled by value to the
+ *     &fman0 port@8x000 cell-index overrides; keep the two in sync.
+ *   - DPAA portal/buffer plumbing (qman/bman portals, the bman-fbpr /
+ *     qman-fqd / qman-pfdr reserved-memory regions referenced below) is
+ *     NOT in this file. It is provided by the SDK dtsi overlay
+ *     (fsl-ls1046a.dtsi + qoriq-*-portals-sdk.dtsi), which stays
+ *     OpenWrt/SDK-owned build plumbing. Do not re-vendor those here.
+ *   - The only consumer-specific region is the QSPI recovery/backup
+ *     partition map; see the &qspi node near the bottom of this file.
+ *
+ * Note: earlier meta-mono/Armbian copies carried two bare
+ * "bootmem0@a0000000" / "bootmem1@aa000000" nodes. They have no
+ * compatible, no phandle reference, and no driver consumer under this
+ * kernel (DPAA memory is reserved via the reserved-memory regions in the
+ * SDK dtsi), so they were intentionally dropped -- do not restore them.
  */
 
 /dts-v1/;
@@ -85,7 +113,9 @@
 		maximum-power-milliwatt = <3000>;
 	};
 
-	/* SFP LED Controller */
+	/* SFP LED Controller -- LEDs are on the controller node, not the SFP
+	 * nodes (the sff,sfp binding sets additionalProperties: false).
+	 */
 	sfp_led_controller: sfp-led-controller {
 		compatible = "mono,sfp-led";
 
@@ -325,7 +355,7 @@
 &i2c0 {
 	status = "okay";
 
-	/* Thermal sensors, retimer, clock genenerator, PWM fan */
+	/* Thermal sensors, retimer, clock generator, PWM fan */
 	i2c-mux@70 {
 		compatible = "nxp,pca9545";
 		reg = <0x70>;
@@ -583,16 +613,46 @@
 		spi-max-frequency = <50000000>;
 		reg = <0>;
 
+		/*
+		 * QSPI NOR (64 MiB) partition map. This is the ONE
+		 * consumer-specific region of this board DTS.
+		 *
+		 * INVARIANT (canonical -- do NOT change per consumer): the
+		 * boot-chain partitions rcw-bl2 / uboot / uboot-env /
+		 * fman-ucode at 0x0..0x500000. Their offsets are baked into
+		 * the RCW and U-Boot and are identical for every consumer.
+		 *
+		 * CONSUMER-SPECIFIC (recovery/backup region above 0x500000,
+		 * and the whole-device raw-access overlay): this map is the
+		 * OpenWrt recovery-FIT scheme (backup + a single recovery-fit
+		 * image), which matches the live rig and is the canonical
+		 * default. Other consumers historically used a different
+		 * split and MUST confirm their recovery/update tooling before
+		 * adopting this map:
+		 *   - OpenWrt : backup (0x500000/0x300000) + recovery-fit
+		 *               (0x800000/0x1800000)   <- this default
+		 *   - Armbian : recovery-dtb (0x500000/0x100000) +
+		 *               backup (0x600000/0x400000) +
+		 *               kernel-initramfs (0xa00000/0x1600000)
+		 *   - meta-ask: TFTP/initramfs-booted -- this region is unused
+		 *               at boot; the map is effectively moot for it.
+		 * A consumer that needs its own layout should override only
+		 * the nodes below this comment, never the boot-chain four.
+		 */
 		partitions {
 			compatible = "fixed-partitions";
 			#address-cells = <1>;
 			#size-cells = <1>;
 
+			/* Whole-device raw mtd access (OpenWrt sysupgrade
+			 * convenience). Deliberately overlaps every partition
+			 * below; consumer-specific. */
 			partition@flash {
 				label = "flash";
 				reg = <0x0 0x4000000>;
 			};
 
+			/* --- canonical boot chain (invariant, do not change) --- */
 			partition@0 {
 				label = "rcw-bl2";
 				reg = <0x0 0x100000>;
@@ -613,6 +673,7 @@
 				reg = <0x400000 0x100000>;
 			};
 
+			/* --- consumer-specific recovery/backup region --- */
 			partition@500000 {
 				label = "backup";
 				reg = <0x500000 0x300000>;

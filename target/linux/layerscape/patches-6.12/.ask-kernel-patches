@@ -1,11 +1,10 @@
-# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ 613e047556436cfed1b139cddb6371935128ec0b
+# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ 98d210fec331bc7269d975459c01e761194fd5d7
 010-ask-fman-dpaa-ehash.patch
 020-ask-bridge-hooks.patch
 030-ask-ipv4-ipv6-forwarding.patch
 040-ask-xfrm-ipsec-offload.patch
 050-ask-conntrack-offload.patch
 060-ask-netfilter-qosmark.patch
-070-ask-ppp-hooks.patch
 080-wext-core-restore-ndo_do_ioctl.patch
 090-qbman-dpa_alloc-preallocate-nodes.patch
 091-sdk_dpaa-dpa_get_channel-use-mutex.patch
@@ -18,3 +17,4 @@
 099-sdk_fman-ehash-flex-arrays.patch
 100-sdk_dpaa-ethtool-quiet-phyless-ports.patch
 101-sdk_fman-sysfs-restore-irqs-on-early-return.patch
+110-sdk-mainline-build-compat.patch

@@ -7,26 +7,26 @@
 #      (qoriq-{qman,bman}-portals-sdk.dtsi, qoriq-dpaa-eth.dtsi). mainline ships
 #      same-named files but with mainline FMan/DPAA bindings the NXP SDK drivers
 #      cannot probe, so the whole DPAA dts base is vendored to shadow mainline's.
-#   2. ASK's kernel patch series (010-101 hooks)   -> target/linux/layerscape/patches-6.12/
+#   2. ASK's kernel patch series (010-110)        -> target/linux/layerscape/patches-6.12/
+#   3. ASK's canonical board DTS (mono-gateway-dk.dts) -> files/.../freescale/
 # OpenWrt's FILES_DIR overlay + normal patch flow then apply them onto OpenWrt's OWN
 # kernel -- no git-cloned vendor kernel, no custom Kernel/Prepare.
 #
-# ASK's patches are developed against a SPECIFIC NXP SDK kernel, so the two travel as
-# one coherent set from a single sync (they cannot skew relative to each other).
+# ASK is the SINGLE pin. ASK's patches are developed against a specific NXP SDK
+# overlay, and ASK records that overlay in a format-neutral pin file
+# (pins/nxp-sdk-srcrev.inc, one line: NXP_SDK_SRCREV = "<sha>"). This script
+# fetches ASK@ASK_VERSION and READS that ref, so the SDK ref can never drift from
+# what ASK was built against -- ASK_VERSION is the only pin to bump.
 #
 # --check: don't write anything; fetch the pinned upstreams and DIFF them against the
 # committed tree, exiting nonzero on any drift. This is the drift guard -- the cut runs
-# it so a release can never ship a vendored file/patch that diverged from its pin. Same
-# code path as the sync, so "check" can't disagree with what "sync" would produce.
+# it so a release can never ship a vendored file/patch/DTS that diverged from its pin.
+# Same code path as the sync, so "check" can't disagree with what "sync" would produce.
 #
-# TODO: single-pin this. ASK already records the NXP kernel it targets, in
-#   meta-ask/recipes-kernel/linux/linux-ask_6.12.bb  (SRCREV = <ref>). Ideally this
-#   script fetches ASK@ASK_VERSION and READS that SRCREV, so ASK_VERSION is the ONE
-#   pin and NXP_SDK_REF can never drift from what ASK was built against. For now
-#   NXP_SDK_REF is a second explicit pin, kept in sync with that recipe by hand.
-#
-# Fetches are blobless+sparse+shallow from the public repos (seconds, a few MB, no
-# full clone), so any maintainer/CI reproduces the identical tree.
+# ASK may be a file:// LOCAL repo (while it is not yet on github, or to test in-repo
+# changes); the NXP SDK is always fetched from github. Remote fetches are
+# blobless+sparse+shallow (seconds, a few MB); the file:// path exports the committed
+# tree with git-archive (no partial-clone / SHA-want limits of the file:// transport).
 #
 # Usage: scripts/mono-sync-ask-kernel.sh [--check]
 set -eu
@@ -36,34 +36,48 @@ cd "$(dirname "$0")/.."
 MODE=sync
 [ "${1:-}" = "--check" ] && MODE=check
 
-# --- pins (keep the two in sync; see TODO above) ---
+# --- pins ---
+# ASK is the single authoritative pin. The NXP SDK ref is READ from ASK's recipe
+# (NXP_SDK_SRCREV) below, never hand-maintained here.
 ASK_URL="https://github.com/we-are-mono/ASK.git"
-ASK_VERSION="613e047556436cfed1b139cddb6371935128ec0b"
+ASK_VERSION="98d210fec331bc7269d975459c01e761194fd5d7"   # tag mono-1.0.0 (pin the SHA: ASK_PKG_VERSION needs it)
 NXP_URL="https://github.com/nxp-qoriq/linux.git"
-NXP_SDK_REF="df24f9428e38740256a410b983003a478e72a7c0"   # == ASK linux-ask_6.12.bb SRCREV (tag lf-6.12.49-2.2.0)
+ASK_SDK_PIN="pins/nxp-sdk-srcrev.inc"   # ASK's format-neutral NXP SDK SRCREV pin
 
-# Bucket-B ASK hooks that mono FORWARD-PORTS to OpenWrt's kernel version. ASK's
-# originals target the older NXP kernel (they fail to apply to 6.12.103), so the
-# sync must NEITHER re-copy NOR clean these -- doing so clobbers the re-anchored
-# mono versions. They are mono-maintained and excluded from the verbatim drift-guard.
-# (Re-derive on a kernel bump via the quilt push-f/refresh loop; see the handoff.)
-MONO_FWD=" 020-ask-bridge-hooks.patch 040-ask-xfrm-ipsec-offload.patch 070-ask-ppp-hooks.patch "
+# ASK hooks mono must FORWARD-PORT because OpenWrt is not stock mainline: 070 re-anchors
+# onto OpenWrt's generic backport 622-v6.18-ppp-remove-rwlock-usage (write_unlock_bh ->
+# spin_unlock in ppp_connect_channel). ASK's verbatim 070 targets stock 6.12.103 (rwlock)
+# and won't apply here. The sync must NEITHER re-copy NOR clean these mono-owned versions;
+# they carry no ASK-verbatim drift guard (git tracks them). Re-derive on a kernel bump via
+# the quilt push-f/refresh loop. (020/040 still sync verbatim -- OpenWrt patches neither.)
+MONO_FWD=" 070-ask-ppp-hooks.patch "
 
 FILES="target/linux/layerscape/files"
 PATCHES="target/linux/layerscape/patches-6.12"
 ASK_MANIFEST="$PATCHES/.ask-kernel-patches"   # provenance + list of synced ASK patches, for clean re-sync / check
+BOARD_DTS="arch/arm64/boot/dts/freescale/mono-gateway-dk.dts"   # ASK-owned canonical board DTS
 
 DRIFT=0
 
-# blobless + sparse (cone) + shallow fetch of <paths...> at <ref> into <tmp>.
+# Fetch <paths...> at <ref> from <url> into <tmp>. Remote: blobless+sparse+shallow.
+# file:// LOCAL repo: git-archive the committed tree at <ref> (avoids the file://
+# transport's partial-clone / allowAnySHA1InWant limitations).
 sparse_fetch() {  # url ref tmp path...
 	_url=$1; _ref=$2; _tmp=$3; shift 3
-	git -C "$_tmp" init -q
-	git -C "$_tmp" remote add origin "$_url"
-	git -C "$_tmp" sparse-checkout init --cone
-	git -C "$_tmp" sparse-checkout set "$@"
-	git -C "$_tmp" fetch -q --depth 1 --filter=blob:none origin "$_ref"
-	git -C "$_tmp" checkout -q FETCH_HEAD
+	case "$_url" in
+	file://*)
+		_repo=${_url#file://}
+		git -C "$_repo" archive "$_ref" "$@" | tar -x -C "$_tmp"
+		;;
+	*)
+		git -C "$_tmp" init -q
+		git -C "$_tmp" remote add origin "$_url"
+		git -C "$_tmp" sparse-checkout init --cone
+		git -C "$_tmp" sparse-checkout set "$@"
+		git -C "$_tmp" fetch -q --depth 1 --filter=blob:none origin "$_ref"
+		git -C "$_tmp" checkout -q FETCH_HEAD
+		;;
+	esac
 }
 
 # sync: install <src> at <dest>. check: diff instead, flag DRIFT. Handles dir or file.
@@ -84,7 +98,16 @@ install_item() {  # src dest label
 KTMP="$(mktemp -d)"; ATMP="$(mktemp -d)"
 trap 'rm -rf "$KTMP" "$ATMP"' EXIT
 
-# ===== 1. NXP SDK driver source -> files/ =====
+# ===== 1. Fetch ASK (single pin): patch series + board DTS + the kernel recipe =====
+echo "sync-ask-kernel [$MODE]: fetching ASK @ $ASK_VERSION"
+sparse_fetch "$ASK_URL" "$ASK_VERSION" "$ATMP" patches/kernel dts pins
+
+# The single-pin source of truth: read the NXP SDK overlay ref from ASK's pin file.
+NXP_SDK_REF=$(sed -n 's/^NXP_SDK_SRCREV *= *"\([0-9a-fA-F]\{40\}\)".*/\1/p' "$ATMP/$ASK_SDK_PIN" | head -1)
+[ -n "$NXP_SDK_REF" ] || { echo "  ERROR: could not read NXP_SDK_SRCREV from ASK $ASK_SDK_PIN" >&2; exit 1; }
+echo "sync-ask-kernel [$MODE]: ASK pins NXP SDK @ $NXP_SDK_REF"
+
+# ===== 2. NXP SDK driver source -> files/ =====
 SDK_SPARSE="drivers/net/ethernet/freescale/sdk_dpaa
 drivers/net/ethernet/freescale/sdk_fman
 drivers/staging/fsl_qbman
@@ -98,7 +121,7 @@ arch/arm64/boot/dts/freescale"
 # qoriq-{q,b}man-portals, qoriq-fman3-0*). mainline's same-named files carry
 # mainline FMan/DPAA bindings the NXP SDK drivers can't probe (fman-port -EIO,
 # oh_port NULL-deref), so the whole base is vendored to shadow them. The board
-# mono-gateway-dk.dts (mono's own, committed under files/) pulls them in.
+# mono-gateway-dk.dts (ASK-owned, synced separately below) pulls them in.
 SDK_PATHS="drivers/net/ethernet/freescale/sdk_dpaa
 drivers/net/ethernet/freescale/sdk_fman
 drivers/staging/fsl_qbman
@@ -136,11 +159,8 @@ else
 	printf '%s\n' "$NXP_SDK_REF" > "$FILES/.nxp-sdk-ref"
 fi
 
-# ===== 2. ASK kernel patch series -> patches-6.12/ =====
-echo "sync-ask-kernel [$MODE]: fetching ASK kernel patches @ $ASK_VERSION"
-sparse_fetch "$ASK_URL" "$ASK_VERSION" "$ATMP" patches/kernel
-
-# In sync mode, drop patches ASK has since removed before re-copying.
+# ===== 3. ASK kernel patch series -> patches-6.12/ =====
+# In sync mode, drop patches ASK has since removed before re-copying (from the manifest).
 if [ "$MODE" = sync ] && [ -f "$ASK_MANIFEST" ]; then
 	while IFS= read -r old; do
 		case "$old" in ''|\#*) continue ;; esac
@@ -173,9 +193,12 @@ else
 	  for b in $fetched; do echo "$b"; done; } > "$ASK_MANIFEST"
 fi
 
+# ===== 4. ASK canonical board DTS -> files/ (guarded via install_item's diff) =====
+install_item "$ATMP/dts/mono-gateway-dk.dts" "$FILES/$BOARD_DTS" "board DTS $BOARD_DTS"
+
 if [ "$MODE" = check ]; then
 	[ "$DRIFT" = 0 ] && echo "sync-ask-kernel: OK -- tree matches ASK@$ASK_VERSION + NXP@$NXP_SDK_REF" \
 		|| { echo "sync-ask-kernel: DRIFT detected -- run scripts/mono-sync-ask-kernel.sh to refresh" >&2; exit 1; }
 else
-	echo "sync-ask-kernel: done -- $(find "$FILES" -type f ! -name '.nxp-sdk-ref' | wc -l) SDK files + $(echo $fetched | wc -w) ASK kernel patches"
+	echo "sync-ask-kernel: done -- $(find "$FILES" -type f ! -name '.nxp-sdk-ref' | wc -l) SDK/DTS files + $(echo $fetched | wc -w) ASK kernel patches"
 fi
