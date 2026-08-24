@@ -39,26 +39,45 @@ There are **two delivery paths**, both published from one release build:
                                                               └──────────────────┘
 ```
 
-### Version channels — rolling + LTS (the decided direction)
+### Version channels — release-branch, owut-driven (CORRECTED 2026-08-24)
 
-Distinct from the two *delivery paths* above, ASU serves one **version channel** per OpenWrt
-line, keyed by the image's baked `version_number`. **Today there is one channel —
-`25.12-SNAPSHOT`** (the `mono` branch tracks `openwrt-25.12`) — and the whole fleet is on it.
+> The earlier "rolling `-SNAPSHOT` channel" model below the fold did not survive contact
+> with owut. **owut deliberately skips any version string containing `-SNAPSHOT`** when it
+> builds its list of upgrade targets (efahl/owut: `if index(version, "-SNAPSHOT") >= 0
+> continue`). A device baked as `25.12-SNAPSHOT` therefore gets *"version-to `25.12-SNAPSHOT`
+> is not available"* and can only be moved by a manual `sysupgrade` — the whole fleet was
+> un-upgradeable via owut. Only a **concrete release version** (`25.12.5`) is owut-upgradeable.
 
-The decided model (activates at the **first OpenWrt line bump**, not before — see
-[versioning.md](versioning.md)), mapped ~1:1 onto the branch model:
+ASU serves one **version channel** per OpenWrt line, keyed by the image's baked
+`version_number`, which **must be a concrete base version** (e.g. `25.12.5`), never a
+`-SNAPSHOT` label. The model:
 
-- rolling branch `mono` → channel **`mono-SNAPSHOT`** (fixed label; always-latest; the OpenWrt
-  base rolls underneath — pinned via `CONFIG_VERSION_NUMBER`, see §4).
-- each on-demand archive branch (`mono-v25.12`, …) → its own **LTS** channel (`25.12-SNAPSHOT`,
-  pinned to that major, still gets its point/security updates).
+- **`version_number` is stamped to the upstream base** — the newest `v25.12.x` tag merged
+  into `mono`, minus the `v` (so `25.12.5`). `mono-update.sh` appends `CONFIG_VERSION_NUMBER`
+  + `CONFIG_VERSION_REPO=…/releases/<base>` right where it stamps `VERSION_CODE` (§4), from
+  the `$LATEST` tag it already computes. It **auto-follows the series** (when `v25.12.6`
+  merges, the stamp follows — no seed edits) and survives `make defconfig` via the seed's
+  `VERSIONOPT` gate (`CONFIG_IMAGEOPT=y`/`CONFIG_VERSIONOPT=y`).
+- **No `asu.toml` change is needed.** `publish-asu-feed.sh` derives the ASU path from the
+  IB's `repositories` (`releases/25.12.5/`), landing under the `[branches."25.12"]` release
+  branch that already exists on the server. The branch's *version list* comes from
+  **upstream** (`UPSTREAM_URL` → downloads.openwrt.org): upstream says "25.12.5 exists" → owut
+  offers it, while **our** IB + feed + profiles.json under `releases/25.12.5/` build the actual
+  image. `/api/v1/revision/25.12.5` then returns **our** revision (was 404 before we published).
 
-A device follows the channel baked into its image and auto-updates within it. `owut --version-to
-<branch>` is the **opt-in** switch between channels (LTS→latest is a clean upgrade; the reverse is
-a downgrade). owut keys its decision on the **revision (`version_code`)**, never the version
-string, so a channel can serve any base's image and the device lands on it. Retiring an LTS
-channel is a one-time server **carry-forward** (re-tag the target IB under the old channel's tag +
-mirror its feed), then delete the channel.
+**Upgrades work on two axes, both via `owut upgrade`:**
+- *Within a version* — rolling revisions under the same `25.12.5`; owut sees a newer `rN` at
+  `/api/v1/revision/25.12.5` and upgrades in place.
+- *Across versions* — when upstream ships `25.12.6`, the cut rebases onto it, stamps `25.12.6`,
+  publishes under `releases/25.12.6/`; the `25.12` branch's list gains it, owut's computed
+  `latest` becomes `25.12.6`, and it offers `25.12.5 → 25.12.6` — exactly how stock OpenWrt
+  walks `24.10.4 → 24.10.5`. One release branch tracks the whole series.
+
+**Fleet migration (one-time):** devices still baked as `25.12-SNAPSHOT` can't owut off it, so
+each needs **one manual `sysupgrade`** onto a `25.12.5` build (§8 has the raw commands); after
+that `owut upgrade` carries them forward. Then retire the old channel: delete
+`[branches."25.12-SNAPSHOT"]` from `asu.toml` and its `releases/25.12-SNAPSHOT/` feed dir.
+Also update [versioning.md](versioning.md), which still describes the retired `-SNAPSHOT` model.
 
 ---
 
@@ -138,10 +157,11 @@ builds report *and* the retired sequential tail (`r5001x`, which ended at `r5001
 was a clean one-way forward jump — no device ever sees a downgrade. (This supersedes the old
 highest-tag+1 counter and its `+50000` stamp offset.) Full scheme: [versioning.md](versioning.md).
 
-> Note: `VERSION_NUMBER` (the channel label, e.g. `25.12-SNAPSHOT`) is **base-derived** — it comes
-> from the upstream OpenWrt line the tree tracks (`include/version.mk` fallback), NOT set by the cut,
-> which stamps only `CONFIG_VERSION_CODE`. To pin a fixed rolling label (`mono-SNAPSHOT`, §1) you set
-> `CONFIG_VERSION_NUMBER` in the seed.
+> Note: the cut stamps **both** `CONFIG_VERSION_CODE` (the epoch `%R`) **and** `CONFIG_VERSION_NUMBER`
+> (the channel label). The label is **not** taken from `include/version.mk`'s `25.12-SNAPSHOT` fallback
+> and is **not** hardcoded in the seed — `mono-update.sh` stamps it to the concrete base version
+> `25.12.5` (from `$LATEST`, §1), because owut refuses any `-SNAPSHOT` label (§7.5). The seed supplies
+> only the `IMAGEOPT → VERSIONOPT` gate that lets both stamps survive `make defconfig`.
 
 Gotchas:
 - `CONFIG_VERSION_CODE` is dropped by `make defconfig` **unless** the seed enables the
@@ -176,9 +196,10 @@ Containers (`podman ps`):
 `asu.env` essentials: `upstream_url = http://upstream` (see §7 for why this is internal-only),
 `BASE_CONTAINER = localhost:5000/imagebuilder`, `PUBLIC_PATH = /home/asu/public/`, `REDIS_URL`.
 `asu.toml`: `[branches."25.12"] path = "releases/{version}"` maps the branch of the reported
-`VERSION_NUMBER=25.12-SNAPSHOT` (branch `25.12`) to `releases/25.12-SNAPSHOT/`. Each additional
-channel (a `mono` rolling branch, further LTS lines) needs its own `[branches."<name>"]` entry, or
-the revision endpoint returns HTTP 400 "Unsupported version".
+`VERSION_NUMBER=25.12.5` (branch `25.12`) to `releases/25.12.5/`. Each additional LTS line
+(`[branches."26.03"]`, …) needs its own entry, or the revision endpoint returns HTTP 400
+"Unsupported version". The `25.12` branch itself needs **no** change to gain `25.12.6` — its
+version list comes from upstream (§1).
 
 **Build cache / store:** `/home/asu/public/store/<request_hash>/` — cached built images. Redis caches
 job/metadata. Both are flushed on every feed refresh (see §6) so a repeated request can't be served a
@@ -189,14 +210,15 @@ stale image.
 `build-ib-container.sh` wraps the mono IB tarball into an asu-compatible container:
 - Derives `TGT` + `VER` from the tarball's `repositories` and tags it
   **`localhost:5000/imagebuilder:<target>-<branch-tag>`**. asu derives `<branch-tag>` itself
-  (`asu/util.py`): a `d.d.d` release → `v<version>`; a **SNAPSHOT branch → `openwrt-<minor>`**. So a
-  `25.12-SNAPSHOT` build is tagged **`layerscape-armv8_64b-openwrt-25.12`** — asu looks the IB up by
-  that exact tag.
+  (`asu/util.py`): a `d.d.d` release → `v<version>`; a SNAPSHOT branch → `openwrt-<minor>`. So a
+  `25.12.5` build is tagged **`layerscape-armv8_64b-v25.12.5`** — asu looks the IB up by that exact
+  tag. (This `v<version>` form is another reason the label must be concrete, not `-SNAPSHOT`.)
 - `Containerfile`: Debian **trixie** base (glibc ≥ the nix-FHS host tools), user `buildbot`, IB unpacked at `/builder`; rewrites the IB's `repositories` `downloads.openwrt.org → http://upstream` **and appends the stock userspace feeds** (base/luci/packages/routing/telephony) pointing at `downloads.openwrt.org`, so a build resolves **mono packages internally + any of the ~9000 stock packages from upstream**. No stock *kmod* feed (wrong vermagic).
 
-The IB tag is keyed by the **branch** (`openwrt-25.12`), **not** the revision — so a re-cut with a new
-`version_code` overwrites the same tag. `make target/imagebuilder/install` must be preceded by
-`make target/imagebuilder/clean` (it reuses a stale build_dir `.config` otherwise).
+The IB tag is keyed by the **version** (`v25.12.5`), **not** the revision `version_code` — so every
+re-cut/revision of `25.12.5` overwrites the same `v25.12.5` tag, and only a base bump (`25.12.6`)
+mints a new one. `make target/imagebuilder/install` must be preceded by `make target/imagebuilder/clean`
+(it reuses a stale build_dir `.config` otherwise).
 
 ### The front nginx  (`/etc/nginx/sites-available/sysupgrade.mono.si`)
 
@@ -230,10 +252,10 @@ location /          { proxy_pass http://127.0.0.1:8000; }        # the asu API +
 ## 6. The ASU feed & its refresh  (`scripts/publish-asu-feed.sh`)
 
 The feed lives at **`/srv/asu-feed/releases/<VER>/`** (`VER` = the reported `version_number`, e.g.
-`25.12-SNAPSHOT`) and is the union the ASU server resolves against:
+`25.12.5`) and is the union the ASU server resolves against:
 
 ```
-releases/25.12-SNAPSHOT/
+releases/25.12.5/
 ├── packages/aarch64_generic/
 │   ├── feeds.conf                         ← REQUIRED (§7.2); lists base/luci/packages/routing/telephony/video
 │   └── {base,luci,packages,…}/index.json  ← per-feed v2 index (mono-built packages)
@@ -308,6 +330,35 @@ ride the 301) plus an `OPTIONS → 204` preflight for `POST /api/v1/build`. Veri
 end-to-end in a browser. See the §5 nginx block. **host-local, not in git** — recreate on
 a host rebuild.
 
+### 7.5 `owut` refused the whole fleet → the channel was `-SNAPSHOT` (2026-08-24)
+`owut check` returned *"version-to `25.12-SNAPSHOT` is not available — pick one from above"*,
+offering only the empty `25.12` release branch (`25.12.5`, which 404s — we published nothing
+there). Root cause: owut computes each branch's offerable version by **skipping any version
+string containing `-SNAPSHOT`** (efahl/owut `collect_overview()`: `if index(version,
+"-SNAPSHOT") >= 0 continue`), so a `25.12-SNAPSHOT` device has a null `latest` and no upgrade
+target — the whole fleet could only manual-dd. Fix: stamp the build as a **concrete base
+version** (`25.12.5`) and publish under `releases/25.12.5/`; see "Version channels" in §1 and
+`mono-update.sh`'s `CONFIG_VERSION_NUMBER` stamp (§4). Verified: `owut check` on a `25.12.5`
+device shows `Version-to 25.12.5 rN` → "safe to proceed."
+
+### 7.6 Installing extra packages & kmods — a rebuild, not `apk add`
+There is **no device-side kmod feed** (the `mono-update` `92-mono-feeds` hook was retired with
+that package). Kmods are vermagic-locked and the base image is lean, so a device gains one by
+having ASU **rebuild the image** with it (the build API takes a `packages` list):
+
+```sh
+owut upgrade -a kmod-veth              # a single kmod
+owut upgrade -a luci-app-dockerman     # an app — its kmod deps (veth, br-netfilter, fs-btrfs, …) come along
+```
+
+`owut --add`/`-a` per package (LuCI: System → Attended Sysupgrade → package list). owut validates
+availability, ASU pulls the kmod from **our** feed + userspace from the stock feed, and the device
+flashes an image with it **installed** — so it persists across every future `owut upgrade`. We ship
+the common-router kmods as `=m` in the seed (feed-only, zero base bloat — containers/WWAN/exFAT/
+bonding/tunnels/netfilter). **Not** a device-side `apk add` feed: on our A/B image model an
+`apk`-installed kmod lives only in the current rootfs slot and is **wiped on the next sysupgrade**;
+the rebuild path bakes it into the image, which is the whole point.
+
 ---
 
 ## 8. Troubleshooting
@@ -315,12 +366,13 @@ a host rebuild.
 Fast diagnostics (from anywhere):
 
 ```sh
-# What does the server advertise / serve?  (VER = the device's channel, e.g. 25.12-SNAPSHOT)
+# What does the server advertise / serve?  (VER = the device's channel, e.g. 25.12.5 — a
+# concrete release branch, NOT 25.12-SNAPSHOT: owut skips any -SNAPSHOT version. See §7.5.)
 curl -s https://sysupgrade.mono.si/api/v1/overview | grep -o '"upstream_url":"[^"]*"'   # must be https://sysupgrade.mono.si
-curl -s https://sysupgrade.mono.si/api/v1/revision/25.12-SNAPSHOT/layerscape/armv8_64b   # must be the CURRENT version_code
-curl -s "https://sysupgrade.mono.si/json/v1/releases/25.12-SNAPSHOT/packages/aarch64_generic-index.json" \
+curl -s https://sysupgrade.mono.si/api/v1/revision/25.12.5/layerscape/armv8_64b   # must be the CURRENT version_code
+curl -s "https://sysupgrade.mono.si/json/v1/releases/25.12.5/packages/aarch64_generic-index.json" \
   | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))'   # flat {name:version} dict; must be hundreds, not 0
-curl -sI https://sysupgrade.mono.si/releases/25.12-SNAPSHOT/targets/layerscape/armv8_64b/profiles.json  # 200
+curl -sI https://sysupgrade.mono.si/releases/25.12.5/targets/layerscape/armv8_64b/profiles.json  # 200
 
 # On the device (the ground truth — LuCI's spinner hides the error):
 owut check            # or `owut check -v`
@@ -349,7 +401,7 @@ Server-side (as `asu`): `podman logs asu-deploy_server_1`, `podman exec asu-depl
 - `scripts/publish-asu-feed.sh` — the complete, fail-closed ASU refresh (IB + feed + profiles.json + feeds.conf + verify).
 - `scripts/mono-latest-json.py` — generates the legacy-channel `latest.json` manifest.
 - `scripts/mono-sign-release.sh`, `scripts/mono-publish-release.sh` — legacy-channel sign + publish.
-- `configs/mono_gateway-dk.seed` — the build config (branding gate for the stamp, package selection, `CONFIG_VERSION_NUMBER` if pinning a channel label).
+- `configs/mono_gateway-dk.seed` — the build config (package selection, and the `CONFIG_IMAGEOPT=y`/`CONFIG_VERSIONOPT=y` gate that lets `mono-update.sh`'s `CONFIG_VERSION_NUMBER`/`CONFIG_VERSION_REPO` stamp survive `make defconfig`). The version value is **not** hardcoded here — it's stamped dynamically from `$LATEST` in `mono-update.sh`.
 - `target/linux/layerscape/image/armv8_64b.mk` — `DEVICE_PACKAGES` (what's baked; what owut preserves).
 - `package/mono/asu-config/` — bakes `attendedsysupgrade.server.url = https://sysupgrade.mono.si`.
 - `include/version.mk`, `scripts/getver.sh`, `version` — the `%R`/`%C` machinery.
