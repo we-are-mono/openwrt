@@ -75,6 +75,60 @@ src-git telephony https://git.openwrt.org/feed/telephony.git
 src-git video https://github.com/openwrt/video.git
 FEEDS
 
+# 3c. Advertise the FULL upstream package set, not just the ~400 Mono-built packages,
+#     so owut/attended-sysupgrade can `-a` (add) and PRESERVE *any* upstream package
+#     across a rebuild - not only what Mono builds. owut's "available in target version"
+#     set is asu's synthesized arch index (/json/v1/<rel>/packages/<arch>-index.json),
+#     which asu builds by unioning the per-feed index.json files under our feed dir
+#     (settings.upstream_url = the internal http://upstream = /srv/asu-feed). A package
+#     absent there is "missing to-version, cannot upgrade" client-side, even though the
+#     IB could build it. So fold upstream's per-feed index.json into ours.
+#     INDEX-ONLY: we do NOT mirror .apks - the ImageBuilder still fetches the real apks
+#     from its appended downloads.openwrt.org feeds at build time (a build with an
+#     upstream-only package resolves + builds fine), so this only advertises availability.
+#     Precedence is upstream-wins on overlap, which within a frozen release equals
+#     highest-version-wins (Mono never exceeds upstream), so the advertised version
+#     matches exactly what the IB installs - no phantom out-of-date/downgrade from owut.
+#     Fail-closed: if the upstream index can't be fetched, refuse (don't ship a feed that
+#     silently can't resolve upstream packages); set -e -> the release tag is dropped.
+echo "publish-asu: folding upstream package index into the feed (owut availability)"
+ssh "$ASU_HOST" "VER='$VER' ARCH='$ARCH' python3 -" <<'MERGE'
+import json, os, sys, urllib.request
+V = os.environ["VER"]; A = os.environ["ARCH"]
+UP = f"https://downloads.openwrt.org/releases/{V}/packages/{A}"
+BASE = f"/srv/asu-feed/releases/{V}/packages/{A}"
+FEEDS = ["base", "luci", "packages", "routing", "telephony", "video"]
+
+def fetch(url):
+    try:
+        with urllib.request.urlopen(url, timeout=90) as r:
+            return json.load(r).get("packages", {})
+    except Exception as e:
+        print(f"  WARN fetch {url}: {e}", file=sys.stderr)
+        return {}
+
+# Fetch everything first; only touch the feed if upstream actually answered, so a
+# transient upstream outage fails the release instead of shipping a gutted index.
+up = {f: fetch(f"{UP}/{f}/index.json") for f in FEEDS}
+up_total = sum(len(v) for v in up.values())
+if up_total < 1000:   # a healthy union is ~9800; <1000 means upstream broadly failed
+    print(f"publish-asu: upstream index fetch returned only {up_total} pkgs - refusing", file=sys.stderr)
+    sys.exit(1)
+
+before = after = 0
+for f in FEEDS:
+    d = f"{BASE}/{f}"; os.makedirs(d, exist_ok=True); lp = f"{d}/index.json"
+    mono = {}
+    if os.path.exists(lp):
+        try: mono = json.load(open(lp)).get("packages", {})
+        except Exception: mono = {}
+    merged = {**mono, **up[f]}   # upstream-wins == highest-wins (verified)
+    json.dump({"version": 2, "architecture": A, "packages": merged}, open(lp, "w"))
+    os.chmod(lp, 0o644)
+    before += len(mono); after += len(merged)
+print(f"  advertised packages: {before} (Mono) -> {after} (Mono + upstream)")
+MERGE
+
 # 4. bust the asu build cache (redis job/result cache + the built-image store) so a
 #    repeated request can't be served a pre-refresh (stale-revision) image.
 ssh "$ASU_HOST" "su - asu -c 'export XDG_RUNTIME_DIR=/run/user/987; podman exec asu-deploy_redis_1 redis-cli FLUSHALL >/dev/null; rm -rf /home/asu/public/store/*'"
@@ -89,3 +143,12 @@ for _ in 1 2 3 4 5 6; do
 done
 [ "$GOT" = "$WANT" ] || { echo "publish-asu: DRIFT - $ASU_URL serves revision '$GOT', but this build is '$WANT'" >&2; exit 1; }
 echo "=== publish-asu: verified $ASU_URL serves $WANT ==="
+
+# 6. VERIFY (fail-closed): the synthesized arch index must now advertise the upstream
+#    union (not just Mono's ~400), or owut still can't add/preserve upstream packages.
+#    This is the index owut fetches for its availability set; assert it's the full set.
+NPKG=$(curl -fsS -m 25 "$ASU_URL/json/v1/releases/$VER/packages/${ARCH}-index.json" 2>/dev/null \
+	| python3 -c 'import sys,json; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)
+[ "${NPKG:-0}" -gt 1000 ] || {
+	echo "publish-asu: arch index advertises only ${NPKG:-0} packages (upstream fold missing?) - refusing" >&2; exit 1; }
+echo "=== publish-asu: arch index advertises $NPKG packages (Mono + upstream) ==="
