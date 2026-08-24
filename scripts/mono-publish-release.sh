@@ -86,7 +86,6 @@ if git remote get-url mono >/dev/null 2>&1; then
 			"$OUT"/*-sysupgrade*.bin "$OUT"/*-emmc.img.gz \
 			"$OUT/sha256sums" "$OUT/sha256sums.sig" \
 			releases/latest.json releases/latest.json.sig \
-			"$OUT/flash-mono-gateway.sh" \
 			|| echo "mono-publish: WARNING: GitHub release failed" >&2
 	fi
 fi

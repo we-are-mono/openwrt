@@ -220,21 +220,6 @@ grep -E '^src-' feeds.conf.default > "$OUT/feeds.lock"
 # refuses to run without the signatures. Keeping the key off the build/publish
 # host means a compromise of this host is not also a signing compromise.
 
-# A real flashing tool, shipped with the release (not a two-step dd in prose).
-cat > "$OUT/flash-mono-gateway.sh" <<'FLASH'
-#!/bin/sh
-# Flash a Mono Gateway eMMC image from recovery Linux, leaving the boot
-# firmware (4 KiB-32 MiB) intact. Usage: flash-mono-gateway.sh <emmc.img.gz> [dev]
-set -e
-IMG="$1"; DEV="${2:-/dev/mmcblk0}"
-[ -f "$IMG" ] || { echo "usage: $0 <...-emmc.img.gz> [/dev/mmcblkN]"; exit 1; }
-case "$IMG" in *.gz) feed(){ gunzip -c "$IMG"; };; *) feed(){ cat "$IMG"; };; esac
-echo "GPT (first 4 KiB)...";     feed | dd of="$DEV" bs=512 count=8 conv=fsync
-echo "System (from 32 MiB)..."; feed | dd of="$DEV" bs=1M skip=32 seek=32 conv=fsync
-sync; echo "Done - set DIP to eMMC and reboot."
-FLASH
-chmod +x "$OUT/flash-mono-gateway.sh"
-
 # latest.json: the manifest devices poll to self-update. Board keys come from
 # the image metadata (profiles.json), not filename string-surgery, so a device
 # that finds no image for its board fails visibly rather than from silent
