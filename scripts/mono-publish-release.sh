@@ -60,7 +60,10 @@ if [ -n "${MONO_PUBLISH_DEST:-}" ]; then
 	# --no-owner/--no-group/--chmod: land a deterministic 755/644 owned by
 	# whoever we publish as, instead of preserving the build tree's uid (1000)
 	# and group-write umask (which left orphaned 775/664 dirs on the server).
-	rsync -a --no-owner --no-group --chmod=D755,F644 "$OUT" "$MONO_PUBLISH_DEST/"
+	# Don't serve patches/ (git format-patch output): it's redundant with the forge
+	# (branch + tag on GitHub) and nothing references it (not in sha256sums, latest.json,
+	# or the gh release), so exclude it from the published dir.
+	rsync -a --no-owner --no-group --chmod=D755,F644 --exclude=patches "$OUT" "$MONO_PUBLISH_DEST/"
 	rsync -a --no-owner --no-group --chmod=D755,F644 releases/latest.json releases/latest.json.sig "$MONO_PUBLISH_DEST/"
 else
 	echo "mono-publish: MONO_PUBLISH_DEST unset, nothing rsynced" >&2
