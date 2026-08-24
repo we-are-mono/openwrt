@@ -7,18 +7,18 @@
 # Requires a built host usign; skips cleanly otherwise. Run from anywhere.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
-REPO=$(cd "$HERE/../../../.." && pwd)
+REPO=$(cd "$HERE/../.." && pwd)
 USIGN="$REPO/staging_dir/host/bin/usign"
 [ -x "$USIGN" ] || { echo "SKIP: host usign not built ($USIGN)"; exit 0; }
 fails=0
 
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
-mkdir -p "$T/scripts" "$T/package/mono/updater/files" "$T/releases/mono-v25.12.5-r7"
+mkdir -p "$T/scripts/release-keys" "$T/releases/mono-v25.12.5-r7"
 cp "$REPO/scripts/mono-sign-release.sh" "$REPO/scripts/mono-publish-release.sh" "$T/scripts/"
 
 # fleet keys (what devices bake) and an unrelated "wrong" key
-"$USIGN" -G -s "$T/fleet.sec" -p "$T/package/mono/updater/files/mono-release.pub" -c fleet >/dev/null
-"$USIGN" -G -s "$T/rot.sec"   -p "$T/package/mono/updater/files/mono-rotation.pub" -c rot >/dev/null
+"$USIGN" -G -s "$T/fleet.sec" -p "$T/scripts/release-keys/mono-release.pub" -c fleet >/dev/null
+"$USIGN" -G -s "$T/rot.sec"   -p "$T/scripts/release-keys/mono-rotation.pub" -c rot >/dev/null
 "$USIGN" -G -s "$T/wrong.sec" -p "$T/wrong.pub" -c wrong >/dev/null
 
 printf 'deadbeef  img-sysupgrade.bin\n' > "$T/releases/mono-v25.12.5-r7/sha256sums"

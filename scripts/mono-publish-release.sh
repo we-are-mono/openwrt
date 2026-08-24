@@ -32,7 +32,7 @@ OUT="releases/$RELTAG"
 USIGN=${MONO_USIGN:-staging_dir/host/bin/usign}
 [ -x "$USIGN" ] || command -v "$USIGN" >/dev/null 2>&1 || {
 	echo "mono-publish: usign not found ($USIGN); set MONO_USIGN" >&2; exit 1; }
-KEYS="package/mono/updater/files/mono-release.pub package/mono/updater/files/mono-rotation.pub"
+KEYS="scripts/release-keys/mono-release.pub scripts/release-keys/mono-rotation.pub"
 verify() {  # <message> <sig>: true if any baked key validates it
 	for k in $KEYS; do
 		[ -f "$k" ] || continue

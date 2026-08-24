@@ -203,12 +203,6 @@ for f in "$BINDIR"/*-layerscape-armv8_64b-mono_*-ext4-emmc.img.gz \
 	cp "$f" "$OUT/$(basename "$f" | sed -E 's/^.*(layerscape-armv8_64b-)/\1/')"
 done
 
-# Per-release kmod feed: kernel modules are vermagic-locked to this build, so
-# devices cannot get them from the official OpenWrt repo. The device's
-# 92-mono-feeds points apk at <url>/<tag>/kmods/. luci + packages come from the
-# official feed; we ship only what it cannot - the signed target/kmod packages.
-mkdir -p "$OUT/kmods"
-cp "$BINDIR"/packages/packages.adb "$BINDIR"/packages/*.apk "$OUT/kmods/"
 # Record the exact feed pins this build used. feeds.conf.default is restored to
 # upstream's tag pins by the EXIT trap, so the release's real feed state is captured
 # here (reproduce with: apply these pins, `./scripts/feeds update`, rebuild).
