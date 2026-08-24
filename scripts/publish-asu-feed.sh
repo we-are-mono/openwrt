@@ -20,8 +20,9 @@
 set -eu
 
 # ASU host: default to the publish dest's host (root@<host>) so no IP is hardcoded here.
-# Override with GROOT=user@host; MONO_PUBLISH_DEST is set by the cut's env (mono@<host>).
-GROOT=${GROOT:-root@${MONO_PUBLISH_DEST##*@}}
+# Override with ASU_HOST=user@host. MONO_PUBLISH_DEST is the cut's rsync dest
+# (mono@<host>:<path>); strip the user (##*@) and the :<path> (%%:*) to get the bare host.
+_asu_h=${MONO_PUBLISH_DEST##*@}; ASU_HOST=${ASU_HOST:-root@${_asu_h%%:*}}
 ASU_URL=${ASU_URL:-https://sysupgrade.mono.si}
 TARGET=${ASU_TARGET:-layerscape/armv8_64b}
 ARCH=${ASU_ARCH:-aarch64_generic}
@@ -43,8 +44,8 @@ echo "=== publish-asu: $ASU_URL <- version $VER, revision $WANT ==="
 # 1. ship the IB tarball + rebuild the IB container (asu's rootless podman, uid 987).
 #    asu looks the IB up as imagebuilder:<target>-v<version>; build-ib-container.sh
 #    rebuilds+pushes that tag from whatever tarball is in place.
-rsync -a --no-owner --no-group "$TARBALL" "$GROOT:/home/asu/mono-ib-build/$(basename "$TARBALL")"
-ssh "$GROOT" bash -s <<'REMOTE'
+rsync -a --no-owner --no-group "$TARBALL" "$ASU_HOST:/home/asu/mono-ib-build/$(basename "$TARBALL")"
+ssh "$ASU_HOST" bash -s <<'REMOTE'
 set -e
 chown asu:asu /home/asu/mono-ib-build/*-imagebuilder-*.tar.zst
 su - asu -c 'export XDG_RUNTIME_DIR=/run/user/987; bash ~/mono-ib-build/build-ib-container.sh'
@@ -54,10 +55,10 @@ REMOTE
 #         + the target profiles.json the revision endpoint reads.
 # A brand-new version dir has no parents yet, and rsync won't create multiple missing
 # path levels without --mkpath - so make the tree first (idempotent for existing ones).
-ssh "$GROOT" "mkdir -p '$DEST/packages/$ARCH' '$DEST/targets/$TARGET'"
-rsync -a --no-owner --no-group --chmod=D755,F644 "$BIN/packages/$ARCH/" "$GROOT:$DEST/packages/$ARCH/"
-rsync -a --no-owner --no-group --chmod=D755,F644 "$TDIR/packages/"      "$GROOT:$DEST/targets/$TARGET/packages/"
-rsync -a --no-owner --no-group --chmod=F644      "$TDIR/profiles.json"  "$GROOT:$DEST/targets/$TARGET/profiles.json"
+ssh "$ASU_HOST" "mkdir -p '$DEST/packages/$ARCH' '$DEST/targets/$TARGET'"
+rsync -a --no-owner --no-group --chmod=D755,F644 "$BIN/packages/$ARCH/" "$ASU_HOST:$DEST/packages/$ARCH/"
+rsync -a --no-owner --no-group --chmod=D755,F644 "$TDIR/packages/"      "$ASU_HOST:$DEST/targets/$TARGET/packages/"
+rsync -a --no-owner --no-group --chmod=F644      "$TDIR/profiles.json"  "$ASU_HOST:$DEST/targets/$TARGET/profiles.json"
 
 # 3b. The ASU server's arch package-index endpoint (/json/v1/.../<arch>-index.json)
 #     discovers the per-arch feeds by reading a feeds.conf (asu util.parse_feeds_conf:
@@ -65,7 +66,7 @@ rsync -a --no-owner --no-group --chmod=F644      "$TDIR/profiles.json"  "$GROOT:
 #     none, so without this the arch index is EMPTY and owut reports every arch package
 #     "missing to-version, cannot upgrade". The names MUST match the served subdirs
 #     (base/luci/packages/routing/telephony/video); the URLs are ignored by asu.
-ssh "$GROOT" "cat > '$DEST/packages/$ARCH/feeds.conf' && chmod 644 '$DEST/packages/$ARCH/feeds.conf'" <<'FEEDS'
+ssh "$ASU_HOST" "cat > '$DEST/packages/$ARCH/feeds.conf' && chmod 644 '$DEST/packages/$ARCH/feeds.conf'" <<'FEEDS'
 src-git base https://git.openwrt.org/openwrt/openwrt.git
 src-git packages https://git.openwrt.org/feed/packages.git
 src-git luci https://git.openwrt.org/project/luci.git
@@ -76,7 +77,7 @@ FEEDS
 
 # 4. bust the asu build cache (redis job/result cache + the built-image store) so a
 #    repeated request can't be served a pre-refresh (stale-revision) image.
-ssh "$GROOT" "su - asu -c 'export XDG_RUNTIME_DIR=/run/user/987; podman exec asu-deploy_redis_1 redis-cli FLUSHALL >/dev/null; rm -rf /home/asu/public/store/*'"
+ssh "$ASU_HOST" "su - asu -c 'export XDG_RUNTIME_DIR=/run/user/987; podman exec asu-deploy_redis_1 redis-cli FLUSHALL >/dev/null; rm -rf /home/asu/public/store/*'"
 
 # 5. VERIFY (fail-closed): ASU must now report EXACTLY the revision we built. A few
 #    retries absorb front-proxy propagation; a persistent mismatch fails the release.
