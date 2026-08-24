@@ -5,11 +5,14 @@
 # re-apply happens after a crash-restart too, not only on first boot -- cmm's
 # QoS state is in-memory and does not survive a restart.
 #
-# The re-applier is forked BEFORE the exec below, so it keeps running as a
-# child of the cmm process image and does its work in parallel with cmm start.
+# The re-applier is DOUBLE-FORKED so it reparents to init (pid 1): the outer
+# subshell backgrounds the loop and exits at once (reaped by this wrapper),
+# orphaning the loop to init. Otherwise the loop outlives the exec below as a
+# child of the cmm C-daemon -- which never wait()s for it -- and lingers as a
+# <defunct> zombie for cmm's whole lifetime (one per (re)start).
 
 if [ -x /etc/init.d/cmmqos ]; then
-	(
+	( (
 		# cmm writes its pidfile before its CLI socket is listening, so a live
 		# process is not a readiness signal. Just retry the apply: it fails
 		# cleanly (non-zero) until cmm accepts 'cmm -c qm-config', then succeeds
@@ -21,7 +24,7 @@ if [ -x /etc/init.d/cmmqos ]; then
 			i=$((i + 1))
 		done
 		logger -t cmm "cmm-supervise: QoS not applied within 30s of cmm (re)start"
-	) &
+	) & )
 fi
 
 exec /usr/bin/cmm -F -f /etc/config/fastforward -n 131072
