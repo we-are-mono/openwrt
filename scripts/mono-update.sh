@@ -209,7 +209,6 @@ done
 # official feed; we ship only what it cannot - the signed target/kmod packages.
 mkdir -p "$OUT/kmods"
 cp "$BINDIR"/packages/packages.adb "$BINDIR"/packages/*.apk "$OUT/kmods/"
-git format-patch --quiet -o "$OUT/patches" "$LATEST..$BRANCH"
 # Record the exact feed pins this build used. feeds.conf.default is restored to
 # upstream's tag pins by the EXIT trap, so the release's real feed state is captured
 # here (reproduce with: apply these pins, `./scripts/feeds update`, rebuild).
