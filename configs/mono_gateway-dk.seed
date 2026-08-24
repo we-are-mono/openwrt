@@ -135,3 +135,48 @@ CONFIG_PACKAGE_luci-app-usteer=y
 # line stops the stale =y from re-installing it. (Keeping shell apk AVC-clean under
 # enforcing is future policy work on the login/admin domain, not precluded here.)
 # CONFIG_PACKAGE_luci-app-package-manager is not set
+
+# Proactive feed-only kmods for common router use-cases. =m means built as a
+# package but NOT installed in the image (zero image bloat); they ride the ASU
+# server's kmod feed so a user can pull them into an owut/attended-sysupgrade
+# rebuild without us re-touching the config each time. Userspace bits (dockerd,
+# uqmi/umbim/comgt-ncm, ...) are stock apk-feed packages and are intentionally
+# not listed here. QoS/SQM (sched-cake, ifb) is deliberately EXCLUDED: software
+# shaping would race the ASK CEETM hardware QoS on the offload path.
+
+# Containers / Docker (overlay2 + cgroups/memcg are already kernel-builtin)
+CONFIG_PACKAGE_kmod-fs-btrfs=m
+CONFIG_PACKAGE_kmod-veth=m
+CONFIG_PACKAGE_kmod-br-netfilter=m
+CONFIG_PACKAGE_kmod-macvlan=m
+CONFIG_PACKAGE_kmod-ipt-nat=m
+CONFIG_PACKAGE_kmod-ipt-nat6=m
+CONFIG_PACKAGE_kmod-ipt-extra=m
+CONFIG_PACKAGE_kmod-ipt-physdev=m
+CONFIG_PACKAGE_kmod-nf-ipvs=m
+
+# Cellular WWAN (LTE/5G backup WAN); userspace uqmi/umbim/comgt-ncm from the feed
+CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=m
+CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=m
+CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=m
+CONFIG_PACKAGE_kmod-usb-serial-option=m
+CONFIG_PACKAGE_kmod-usb-acm=m
+
+# USB-drive filesystems (ext4/vfat/f2fs already builtin)
+CONFIG_PACKAGE_kmod-fs-exfat=m
+CONFIG_PACKAGE_kmod-fs-ntfs3=m
+CONFIG_PACKAGE_kmod-usb-storage-uas=m
+
+# Link aggregation + virtual net devices
+CONFIG_PACKAGE_kmod-bonding=m
+CONFIG_PACKAGE_kmod-dummy=m
+
+# Tunnels / overlay networks
+CONFIG_PACKAGE_kmod-gre=m
+CONFIG_PACKAGE_kmod-vxlan=m
+CONFIG_PACKAGE_kmod-l2tp=m
+
+# Netfilter extras (transparent proxy, ipset, FTP/SIP/etc conntrack helpers)
+CONFIG_PACKAGE_kmod-nft-tproxy=m
+CONFIG_PACKAGE_kmod-ipt-ipset=m
+CONFIG_PACKAGE_kmod-nf-nathelper-extra=m
