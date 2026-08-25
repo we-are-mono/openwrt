@@ -31,6 +31,9 @@ make -j"$(nproc)" world
 runs and the invocation hangs. Use `nix run`, which enters the FHS env directly:
 
 ```sh
+./scripts/feeds update -a
+./scripts/feeds install -a
+cp configs/mono_gateway-dk.seed .config
 nix run . -- -c 'make -j"$(nproc)" world'
 ```
 
