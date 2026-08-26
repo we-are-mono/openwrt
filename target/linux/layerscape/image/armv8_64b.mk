@@ -486,6 +486,7 @@ define Device/mono_gateway-dk
 	kmod-i2c-core kmod-hwmon-core kmod-hwmon-ina2xx kmod-hwmon-lm90 \
 	kmod-regmap-core kmod-regmap-i2c i2csfp i2c-tools usbutils pciutils \
 	luci-light libustream-mbedtls px5g-mbedtls -luci-app-package-manager \
+	-kmod-usb-storage \
 	ip-full ethtool-full tcpdump telnet-bsd \
 	strongswan strongswan-default strongswan-mod-openssl openvpn-openssl luci-app-openvpn \
 	block-mount resize2fs e2fsprogs usign ca-bundle uboot-envtools mono-ab-env \
