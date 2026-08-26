@@ -75,6 +75,16 @@ src-git telephony https://git.openwrt.org/feed/telephony.git
 src-git video https://github.com/openwrt/video.git
 FEEDS
 
+# 3b2. The overview's branch->targets map (which owut reads to know a version supports THIS
+#      device's target) comes from asu reload_targets fetching `<version>/.targets.json`
+#      (asu util.reload_targets). Without it the branch's `targets` is {} and owut refuses
+#      the ENTIRE version: "version-to <ver> is not available, pick one from above" (empty
+#      list). asu caches it in-process, so a missing file only bites after a server
+#      restart/flush - write it every publish so it can never silently go stale.
+ssh "$ASU_HOST" "cat > '$DEST/.targets.json' && chmod 644 '$DEST/.targets.json'" <<TARGETS
+{"$TARGET": "$ARCH"}
+TARGETS
+
 # 3c. Advertise the FULL upstream package set, not just the ~400 Mono-built packages,
 #     so owut/attended-sysupgrade can `-a` (add) and PRESERVE *any* upstream package
 #     across a rebuild - not only what Mono builds. owut's "available in target version"
@@ -152,3 +162,19 @@ NPKG=$(curl -fsS -m 25 "$ASU_URL/json/v1/releases/$VER/packages/${ARCH}-index.js
 [ "${NPKG:-0}" -gt 1000 ] || {
 	echo "publish-asu: arch index advertises only ${NPKG:-0} packages (upstream fold missing?) - refusing" >&2; exit 1; }
 echo "=== publish-asu: arch index advertises $NPKG packages (Mono + upstream) ==="
+
+# 7. VERIFY (fail-closed): owut refuses a whole version whose branch has empty `targets`
+#    (the .targets.json from 3b2) - "version-to <ver> is not available, pick one from
+#    above". Assert the overview lists OUR target under OUR version's branch.
+OVOK=no
+for _ in 1 2 3 4; do
+	OVOK=$(curl -fsS -m 25 "$ASU_URL/json/v1/overview.json" 2>/dev/null \
+		| VER="$VER" TGT="$TARGET" python3 -c 'import sys,json,os
+d=json.load(sys.stdin); b=d.get("branches",d); V=os.environ["VER"]; T=os.environ["TGT"]
+print("ok" if any(V in x.get("versions",[]) and T in (x.get("targets") or {}) for x in b.values()) else "no")' 2>/dev/null || echo no)
+	[ "$OVOK" = ok ] && break
+	sleep 3
+done
+[ "$OVOK" = ok ] || {
+	echo "publish-asu: overview lists no '$TARGET' under '$VER' (.targets.json missing) - owut would refuse the version - refusing" >&2; exit 1; }
+echo "=== publish-asu: verified owut can resolve $VER for $TARGET ==="
