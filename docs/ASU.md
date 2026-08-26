@@ -255,26 +255,40 @@ The feed lives at **`/srv/asu-feed/releases/<VER>/`** (`VER` = the reported `ver
 `25.12.5`) and is the union the ASU server resolves against:
 
 ```
-releases/25.12.5/
-├── packages/aarch64_generic/
-│   ├── feeds.conf                         ← REQUIRED (§7.2); lists base/luci/packages/routing/telephony/video
-│   └── {base,luci,packages,…}/index.json  ← per-feed v2 index: Mono-built ∪ upstream (§7.7)
-└── targets/layerscape/armv8_64b/
-    ├── profiles.json                      ← carries version_code (the revision endpoint reads this)
-    ├── index.json                         ← target/kmod package index
-    └── packages/*.apk                     ← target + kmod .apks
+/srv/asu-feed/
+├── .versions.json                          ← the version LIST (asu reload_versions): versions_list + stable/upcoming.
+│                                             Top-level, lists ALL versions. Missing/omitting a version ⇒ owut can't offer it.
+└── releases/25.12.5/
+    ├── .targets.json                       ← {"layerscape/armv8_64b":"aarch64_generic"} — the branch→targets map
+    │                                          (asu reload_targets). MISSING ⇒ branch targets={} ⇒ owut refuses the whole
+    │                                          version: "version-to <ver> is not available" (§8). Written by publish-asu-feed.sh.
+    ├── packages/aarch64_generic/
+    │   ├── feeds.conf                       ← REQUIRED (§7.2); lists base/luci/packages/routing/telephony/video
+    │   └── {base,luci,packages,…}/index.json ← per-feed v2 index: Mono-built ∪ upstream (§7.7)
+    └── targets/layerscape/armv8_64b/
+        ├── profiles.json                   ← carries version_code (the revision endpoint reads this)
+        ├── index.json                      ← target/kmod package index
+        └── packages/*.apk                  ← target + kmod .apks
 ```
+
+**Three ASU-server metadata files owut/asu depend on** (none are OpenWrt build outputs — the mono
+feed must supply them): `.versions.json` (version list), per-version `.targets.json` (branch→targets),
+and per-arch `feeds.conf` (the userspace-feed subdir names). All served from `/srv/asu-feed` by the
+internal `upstream` nginx; asu caches each in-process, so a missing one only bites after a
+restart/flush — which is exactly how a stale/absent `.targets.json` silently broke owut once.
 
 `publish-asu-feed.sh` is the **complete** refresh (run by the cut, fail-closed). It, in one shot:
 
 1. rsyncs the **IB tarball** to `/home/asu/mono-ib-build/` and rebuilds the IB container (`build-ib-container.sh`).
-2. rsyncs the **package feed** + the **`profiles.json`** + writes the **`feeds.conf`**.
+2. rsyncs the **package feed** + the **`profiles.json`**, and writes the **`feeds.conf`** + the
+   per-version **`.targets.json`** (`{"<target>":"<arch>"}`) that the overview's branch→targets map reads.
 3. **folds the upstream package index into the feed** (§7.7) so owut can resolve ANY upstream
    package, not just the ~400 Mono builds — index-only (no apks), upstream-wins, and fail-closed
    if upstream is unreachable (`exit 1` rather than ship a feed that can't resolve upstream).
 4. flushes the asu build cache (`redis FLUSHALL` + `rm -rf public/store/*`).
-5. **verifies** `GET /api/v1/revision/<VER>/<target>` returns the exact `version_code` just built
-   **and** that the arch index now advertises the full union (`>1000` packages) — either mismatch →
+5. **verifies** (fail-closed) `GET /api/v1/revision/<VER>/<target>` returns the exact `version_code`
+   just built, the arch index advertises the full union (`>1000` packages), **and** the overview lists
+   our target under our version (empty targets ⇒ owut refuses the version) — any mismatch →
    `exit 1` → the cut's trap drops the tag. (The target host + server URL are env-overridable.)
 
 Everything shipped comes from the *same* build, so the IB, the feed indexes, and `profiles.json` can
@@ -345,25 +359,28 @@ version** (`25.12.5`) and publish under `releases/25.12.5/`; see "Version channe
 `mono-update.sh`'s `CONFIG_VERSION_NUMBER` stamp (§4). Verified: `owut check` on a `25.12.5`
 device shows `Version-to 25.12.5 rN` → "safe to proceed."
 
-### 7.6 Installing extra packages & kmods — a rebuild, not `apk add`
-There is **no device-side kmod feed** (the `mono-update` `92-mono-feeds` hook was retired with
-that package). Kmods are vermagic-locked and the base image is lean, so a device gains one by
-having ASU **rebuild the image** with it (the build API takes a `packages` list):
+### 7.6 Installing extra packages & kmods (owut = persistent, apk = throwaway)
+Two paths, and **both now resolve our-vermagic kmods**:
 
-```sh
-owut upgrade -a kmod-veth              # a single kmod
-owut upgrade -a luci-app-dockerman     # an app — its kmod deps (veth, br-netfilter, fs-btrfs, …) come along
-```
+- **Persistent — `owut upgrade -a <pkg>`** (the recommended way). ASU **rebuilds the image** with the
+  package baked in, so it survives every future sysupgrade. owut validates availability against the
+  feed's advertised index — which carries the **full upstream set** (§7.7) — and ASU pulls Mono
+  packages + kmods from **our** feed + stock userspace from upstream:
+  ```sh
+  owut upgrade -a kmod-veth              # a single kmod
+  owut upgrade -a luci-app-dockerman     # an app — its kmod deps (veth, br-netfilter, fs-btrfs, …) come along
+  ```
+  (LuCI: System → Attended Sysupgrade → package list.)
+- **Throwaway — on-device `apk add <pkg>`**. Also resolves our kmods now: `mono-asu-config`'s
+  `53-mono-apk-kmod-feed` uci-defaults script host-swaps the device's **target (kmod) apk feed** line
+  in `distfeeds.list` to `sysupgrade.mono.si` (our vermagic), leaving userspace on upstream — so
+  `apk add podman` pulls `podman` from upstream + `kmod-veth` from us. But on our A/B image an
+  `apk`-installed package lives only in the current rootfs slot and is **wiped on the next
+  sysupgrade** — use `owut -a` for anything you want to keep.
 
-`owut --add`/`-a` per package (LuCI: System → Attended Sysupgrade → package list). owut validates
-availability against the feed's advertised index — which now carries the **full upstream set**, not
-just Mono's (§7.7, the fix that makes "install anything" actually work) — ASU pulls Mono packages +
-kmods from **our** feed and stock userspace from upstream, and the device flashes an image with it
-**installed**, so it persists across every future `owut upgrade`. We also ship the common-router
-kmods as `=m` in the seed (feed-only, zero base bloat — containers/WWAN/exFAT/bonding/tunnels/
-netfilter), so they resolve from *our* feed at the correct vermagic. **Not** a device-side `apk add`
-feed: on our A/B image model an `apk`-installed package lives only in the current rootfs slot and is
-**wiped on the next sysupgrade**; the rebuild path bakes it into the image, which is the whole point.
+We also ship the common-router kmods as `=m` in the seed (feed-only, zero base bloat —
+containers/WWAN/exFAT/bonding/tunnels/netfilter), so they resolve from *our* feed at the correct
+vermagic either way.
 
 ### 7.7 Making `owut` resolve ANY upstream package — fold the upstream index (2026-08-24)
 `owut upgrade -a btop` (or preserving any `apk add`ed upstream package) failed with *"N packages
@@ -417,6 +434,7 @@ uci get attendedsysupgrade.server.url
 | `owut … DOWNGRADE` | stamp below the getver constant | revision endpoint value; §4 |
 | `N packages missing to-version` (every pkg) | arch index empty | the `<arch>-index.json` count; `feeds.conf` present (§7.2) |
 | `… missing to-version` for an **upstream** pkg (btop, nano, …) | upstream fold didn't run — feed advertises only Mono's ~400 | `<arch>-index.json` count should be ~9,800 not ~400; re-run `publish-asu-feed.sh` (§7.7) |
+| `owut: version-to <ver> is not available` (empty list) | branch `targets={}` — `.targets.json` missing for that version (esp. after a server restart/flush) | overview's branch `targets` (§6); `publish-asu-feed.sh` writes `releases/<ver>/.targets.json` — create `{"<target>":"<arch>"}` + flush redis if absent |
 | revision endpoint → 400 "Unsupported version" | no `[branches."<name>"]` for the device's channel | add the branch to `asu.toml` (§5) |
 | `Image not found: …imagebuilder:…` on build | IB container not (re)built for this branch tag | `build-ib-container.sh`; registry catalog |
 | revision endpoint stale after a publish | `profiles.json` not refreshed / caches | re-run `publish-asu-feed.sh`; it flushes redis + store |
