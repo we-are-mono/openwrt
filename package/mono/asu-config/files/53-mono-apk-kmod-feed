@@ -1,0 +1,23 @@
+#!/bin/sh
+# Point ONLY the target/kmod apk feed at the mono mirror.
+#
+# base-files bakes /etc/apk/repositories.d/distfeeds.list with every line under
+# CONFIG_VERSION_REPO (= downloads.openwrt.org). Upstream's layerscape target feed
+# carries kmods built for UPSTREAM's kernel/vermagic, not ours - so on-device
+# `apk add <anything-that-pulls-a-kmod>` (e.g. podman -> kmod-veth) fails with
+# "no such package". Our own kmods (correct vermagic) live at sysupgrade.mono.si.
+#
+# Swap the host on the single `/targets/.../packages` line to our mirror and leave
+# the userspace feeds on upstream (they carry the ~9000 stock packages our feed
+# does not). apk trusts our index - signed with the baked mono key - alongside
+# upstream's, so the mixed list verifies. Host-swap only (keep the version path),
+# so it tracks 25.12.6, 25.12.7, ... automatically. Only the target line contains
+# "targets"; the arch lines have "aarch64_generic", so the address is unambiguous.
+#
+# Idempotent (re-swapping our own host is a no-op) and re-runs on every flashed
+# image's first boot to re-assert the mirror over the freshly-baked upstream line.
+f=/etc/apk/repositories.d/distfeeds.list
+[ -f "$f" ] || exit 0
+sed -i '/targets/ s#https://[^/]*/#https://sysupgrade.mono.si/#' "$f"
+logger -t mono-apk-kmod-feed "kmod (targets) apk feed -> sysupgrade.mono.si"
+exit 0
