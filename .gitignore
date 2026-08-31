@@ -36,3 +36,6 @@ git-src
 .ccache
 .vscode*
 /releases
+
+# mono-update: kernel-config hash stamp (build state, never committed)
+/.mono-kbuild.sha

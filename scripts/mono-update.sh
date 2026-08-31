@@ -192,9 +192,21 @@ echo "mono-update: stamping revision $REVCODE, version $VNUM"
 # must carry the same REVCODE (its version_code is what owut reads as the "to" target).
 nix run . -- -c 'set -e
 	make defconfig
+	# A kmod-set / kernel-config change (from the seed or DEVICE_PACKAGES) leaves the
+	# kernel build_dir stale, and out-of-tree modules (nxp-mwifiex, ask) then fail to
+	# build against it (needs target/linux/clean). Hash the kernel-relevant slice of the
+	# resolved .config; if it changed since the last SUCCESSFUL build, force a clean
+	# kernel rebuild. Only pays the kernel recompile when it actually changed - doc /
+	# userspace-only cuts stay incremental.
+	khash=$(grep -E "^CONFIG_(PACKAGE_kmod-|KERNEL_|LINUX_|TARGET_)" .config | sha256sum | cut -d" " -f1)
+	if [ "$khash" != "$(cat .mono-kbuild.sha 2>/dev/null)" ]; then
+		echo "mono-update: kernel config changed since last build -> make target/linux/clean"
+		make target/linux/clean
+	fi
 	make -j"$(nproc)" world
 	make target/imagebuilder/clean
-	make target/imagebuilder/install'
+	make target/imagebuilder/install
+	echo "$khash" > .mono-kbuild.sha'
 
 OUT="releases/$RELTAG"
 URLBASE="${MONO_PUBLISH_URL:-https://openwrt.mono.si}"
