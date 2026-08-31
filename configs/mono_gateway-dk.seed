@@ -175,6 +175,7 @@ CONFIG_PACKAGE_kmod-dummy=m
 CONFIG_PACKAGE_kmod-gre=m
 CONFIG_PACKAGE_kmod-vxlan=m
 CONFIG_PACKAGE_kmod-l2tp=m
+CONFIG_PACKAGE_kmod-sit=m
 
 # Netfilter extras (transparent proxy, ipset, FTP/SIP/etc conntrack helpers)
 CONFIG_PACKAGE_kmod-nft-tproxy=m
