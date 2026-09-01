@@ -7,8 +7,10 @@
 /.config.old
 /.toolchain_build_ver
 /bin
+/build
 /build_dir
 /staging_dir
+/local
 /tmp
 /logs
 /feeds
