@@ -80,9 +80,19 @@ if git remote get-url mono >/dev/null 2>&1; then
 	# attached. Repo derived from the remote URL; failure is reported, not fatal.
 	if command -v gh >/dev/null 2>&1; then
 		REPO=$(git remote get-url mono | sed -E 's#(git@[^:]+:|https://[^/]+/)##; s#\.git$##')
+		# Release body: use the notes drafted for this release
+		# (releases/<tag>/RELEASE_NOTES.md) if present, else a boilerplate
+		# fallback. This body becomes the GitHub release description AND is what
+		# the Discord announcement workflow (.github/workflows/discord-release.yml)
+		# posts, so fill it in at stage time to control both.
+		NOTES_FILE="$OUT/RELEASE_NOTES.md"
+		if [ ! -f "$NOTES_FILE" ]; then
+			NOTES_FILE=$(mktemp)
+			echo "Automated release: $RELTAG." > "$NOTES_FILE"
+		fi
 		gh release create "$RELTAG" --repo "$REPO" \
 			--title "$RELTAG" \
-			--notes "Automated release: $RELTAG." \
+			--notes-file "$NOTES_FILE" \
 			"$OUT"/*-sysupgrade*.bin "$OUT"/*-emmc.img.gz \
 			"$OUT/sha256sums" "$OUT/sha256sums.sig" \
 			releases/latest.json releases/latest.json.sig \

@@ -1,0 +1,99 @@
+# Announce a published GitHub release to Discord.
+#
+# Fires when mono-publish-release.sh (scripts/) creates the release via
+# `gh release create` (no --draft, so it publishes immediately and the
+# `release: published` event fires). Also runnable manually against any past
+# tag via "Run workflow" for testing.
+#
+# SETUP (one-time): add the Discord webhook as a repo secret named
+# DISCORD_WEBHOOK_URL  (repo Settings -> Secrets and variables -> Actions ->
+# New repository secret). In Discord: Server Settings -> Integrations ->
+# Webhooks -> New Webhook -> pick channel -> Copy Webhook URL.
+#
+# NOTE: a `release`-triggered workflow only runs from the file on the DEFAULT
+# branch (mono), so this must live on mono to fire.
+
+name: Announce release to Discord
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to announce (for testing, e.g. mono-v25.12.5-r1788295895)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  announce:
+    name: Post to Discord
+    runs-on: ubuntu-latest
+    # All releases are mono-v*; skip anything else defensively.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.release.tag_name, 'mono-v')
+    steps:
+      - name: Post release announcement
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "::error::DISCORD_WEBHOOK_URL secret is not set" >&2
+            exit 1
+          fi
+
+          # Pull the release fields via gh (unifies the release-event and
+          # manual-dispatch paths, and avoids escaping the event payload).
+          rel_json=$(gh release view "$TAG" --repo "$REPO" \
+            --json tagName,name,url,body,publishedAt)
+
+          name=$(printf '%s' "$rel_json" | jq -r '.name // .tagName')
+          url=$(printf '%s' "$rel_json" | jq -r '.url')
+          body=$(printf '%s' "$rel_json" | jq -r '.body // ""')
+
+          # Public download for the mono_gateway-dk sysupgrade image.
+          dl="https://openwrt.mono.si/${TAG}/layerscape-armv8_64b-mono_gateway-dk-ext4-sysupgrade.bin"
+
+          # Discord embed description cap is 4096 chars; keep well under.
+          desc=$(printf '%s' "$body" | head -c 1500)
+
+          # Build the payload safely with jq (--arg handles all escaping).
+          payload=$(jq -n \
+            --arg title "🚀 New Mono Gateway release: ${name}" \
+            --arg url "$url" \
+            --arg desc "$desc" \
+            --arg dl "$dl" \
+            --arg tag "$TAG" \
+            '{
+              username: "Mono Releases",
+              embeds: [{
+                title: $title,
+                url: $url,
+                description: $desc,
+                color: 3066993,
+                fields: [
+                  { name: "Download (sysupgrade)", value: $dl },
+                  { name: "GitHub release", value: $url }
+                ],
+                footer: { text: $tag }
+              }]
+            }')
+
+          # Discord returns 204 No Content on success.
+          code=$(curl -sS -o /tmp/discord_resp -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -X POST "$WEBHOOK" -d "$payload")
+          echo "Discord responded HTTP $code"
+          if [ "$code" != "204" ] && [ "$code" != "200" ]; then
+            echo "::error::Discord webhook failed ($code): $(cat /tmp/discord_resp)" >&2
+            exit 1
+          fi
+          echo "Announced $TAG to Discord."
