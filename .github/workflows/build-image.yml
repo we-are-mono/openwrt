@@ -1,0 +1,100 @@
+# Build the Mono Gateway image in CI, the same way we build locally:
+#   seed .config -> feeds update/install -> make defconfig -> make world
+# all inside the repo's nix FHS env (flake.nix), which is the ONLY supported
+# way to build this tree (the host bison needs libtextstyle.so.0, absent
+# outside the FHS env -- see mono-flash / mono-release).
+#
+# OPT-IN ONLY: this runs on manual dispatch (and on mono-v* tags), never on
+# every push -- a clean `make world` is ~1.5-3h and the build tree is ~20GB,
+# so we don't want it firing on ordinary commits.
+#
+# NOTE on runners: ubuntu-latest is tight on disk (~14GB free; we reclaim
+# ~20GB below) and slow for a from-scratch build. For routine use, point this
+# at a self-hosted runner on a build host (e.g. groot) by replacing
+# `runs-on: ubuntu-latest` with `runs-on: [self-hosted, <label>]` and dropping
+# the "Free disk space" + nix-installer steps if nix is already present.
+
+name: Build Mono Gateway image
+
+on:
+  workflow_dispatch:
+    inputs:
+      clean:
+        description: "Force a clean kernel rebuild (target/linux/clean before world)"
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "mono-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build mono_gateway-dk (layerscape/armv8_64b)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history + tags: the tree's revision (DISTRIB_REVISION, image
+          # name) is derived from git by scripts/getver.sh.
+          fetch-depth: 0
+
+      - name: Free disk space
+        # A full OpenWrt build tree is ~20GB; the default runner has ~14GB free.
+        # Reclaim the preinstalled toolchains/images we don't need.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" \
+                      /usr/local/lib/node_modules /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - name: Install Nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Build image
+        run: |
+          set -euo pipefail
+          # Seed the profile config exactly as mono-update.sh / mono-flash do.
+          cp configs/mono_gateway-dk.seed .config
+          CLEAN='${{ inputs.clean }}'
+          # Everything that touches the build must run inside the FHS env.
+          # `nix run .` (not `nix develop -c`) is required -- see flake.nix.
+          nix run . -- -c '
+            set -euxo pipefail
+            ./scripts/feeds update -a
+            ./scripts/feeds install -a
+            make defconfig
+            if [ "'"$CLEAN"'" = "true" ]; then make target/linux/clean; fi
+            make -j"$(nproc)" world
+          '
+
+      - name: Resolve image + checksums
+        id: img
+        run: |
+          set -euo pipefail
+          D=bin/targets/layerscape/armv8_64b
+          SYS=$(find "$D" -maxdepth 1 -name 'mono-*-mono_gateway-dk-ext4-sysupgrade.bin' ! -name '*-legacy*' | head -1)
+          test -n "$SYS" || { echo "no sysupgrade image built" >&2; ls -la "$D" >&2; exit 1; }
+          echo "dir=$D" >> "$GITHUB_OUTPUT"
+          echo "### Built image" >> "$GITHUB_STEP_SUMMARY"
+          ( cd "$D" && sha256sum mono-*-mono_gateway-dk-ext4-* *.manifest 2>/dev/null ) | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload image artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mono_gateway-dk-images
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ steps.img.outputs.dir }}/mono-*-mono_gateway-dk-ext4-sysupgrade.bin
+            ${{ steps.img.outputs.dir }}/mono-*-mono_gateway-dk-ext4-emmc.img.gz
+            ${{ steps.img.outputs.dir }}/mono-*-mono_gateway-dk.manifest
+            ${{ steps.img.outputs.dir }}/sha256sums
