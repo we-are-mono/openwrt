@@ -40,7 +40,7 @@ MODE=sync
 # ASK is the single authoritative pin. The NXP SDK ref is READ from ASK's recipe
 # (NXP_SDK_SRCREV) below, never hand-maintained here.
 ASK_URL="https://github.com/we-are-mono/ASK.git"
-ASK_VERSION="98d210fec331bc7269d975459c01e761194fd5d7"   # tag mono-1.0.0 (pin the SHA: ASK_PKG_VERSION needs it)
+ASK_VERSION="29ccc4e198c6cf0044a3ea87b7c4bffeb23ff6f1"
 NXP_URL="https://github.com/nxp-qoriq/linux.git"
 ASK_SDK_PIN="pins/nxp-sdk-srcrev.inc"   # ASK's format-neutral NXP SDK SRCREV pin
 
