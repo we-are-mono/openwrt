@@ -41,6 +41,69 @@ WANT=$(grep -oE '"version_code":"[^"]*"' "$TDIR/profiles.json" 2>/dev/null | hea
 DEST="/srv/asu-feed/releases/$VER"
 echo "=== publish-asu: $ASU_URL <- version $VER, revision $WANT ==="
 
+# 1a. Fold upstream's per-feed index.json into the mono feed index HERE (on the build
+#     box, where apk exists), HIGHEST-VERSION-WINS, then let the rsync below ship the
+#     merged index. owut reads this as its "available" set and it MUST equal what the
+#     imagebuilder actually installs. The IB carries BOTH repos - the local mono feed
+#     AND downloads.openwrt.org (see mono-ib-build/Containerfile) - both untagged, so
+#     apk installs the HIGHEST version of each package. Therefore the advertised version
+#     must be max(mono, upstream) per package: plain upstream-wins mis-advertised any
+#     package mono built ahead of the upstream release tag (e.g. owut r2 vs r1) -> the
+#     build 500s in check_manifest; plain mono-wins mis-advertised any package upstream
+#     carries ahead of mono's pinned feed (e.g. adblock/luci) -> owut reports a phantom
+#     downgrade and --force 500s. Only max() matches the IB. `apk version -t` is the
+#     authoritative comparator (~suffixes, -rN, epochs), which is why this runs on the
+#     build box - groot has no apk. Fail-closed: refuse if upstream can't be fetched.
+echo "publish-asu: folding upstream package index into the feed (highest-version-wins)"
+TOP="$PWD"
+VER="$VER" ARCH="$ARCH" BIN="$BIN" APK="$TOP/staging_dir/host/bin/apk" python3 - <<'MERGE'
+import json, os, subprocess, sys, urllib.request, functools
+V = os.environ["VER"]; A = os.environ["ARCH"]; BIN = os.environ["BIN"]; APK = os.environ["APK"]
+UP = f"https://downloads.openwrt.org/releases/{V}/packages/{A}"
+BASE = f"{BIN}/packages/{A}"
+FEEDS = ["base", "luci", "packages", "routing", "telephony", "video"]
+
+@functools.lru_cache(maxsize=None)
+def a_gt_b(a, b):
+    # True iff apk considers version a strictly greater than b.
+    if a == b:
+        return False
+    return subprocess.run([APK, "version", "-t", a, b],
+                          capture_output=True, text=True).stdout.strip() == ">"
+
+def fetch(url):
+    try:
+        with urllib.request.urlopen(url, timeout=90) as r:
+            return json.load(r).get("packages", {})
+    except Exception as e:
+        print(f"  WARN fetch {url}: {e}", file=sys.stderr)
+        return {}
+
+# Fetch all upstream feeds first; only touch the local index if upstream answered, so a
+# transient upstream outage fails the release instead of shipping a gutted index.
+up = {f: fetch(f"{UP}/{f}/index.json") for f in FEEDS}
+up_total = sum(len(v) for v in up.values())
+if up_total < 1000:   # a healthy union is ~9800; <1000 means upstream broadly failed
+    print(f"publish-asu: upstream index fetch returned only {up_total} pkgs - refusing", file=sys.stderr)
+    sys.exit(1)
+
+before = after = 0
+for f in FEEDS:
+    d = f"{BASE}/{f}"; os.makedirs(d, exist_ok=True); lp = f"{d}/index.json"
+    mono = {}
+    if os.path.exists(lp):
+        try: mono = json.load(open(lp)).get("packages", {})
+        except Exception: mono = {}
+    merged = dict(up[f])                       # start from upstream
+    for name, mver in mono.items():            # then let mono win only when it is >= upstream
+        uver = up[f].get(name)
+        merged[name] = mver if (uver is None or a_gt_b(mver, uver)) else uver
+    json.dump({"version": 2, "architecture": A, "packages": merged}, open(lp, "w"))
+    os.chmod(lp, 0o644)
+    before += len(mono); after += len(merged)
+print(f"  advertised packages: {before} (Mono) -> {after} (Mono + upstream, highest-wins)")
+MERGE
+
 # 1. ship the IB tarball + rebuild the IB container (asu's rootless podman, uid 987).
 #    asu looks the IB up as imagebuilder:<target>-v<version>; build-ib-container.sh
 #    rebuilds+pushes that tag from whatever tarball is in place.
@@ -85,59 +148,16 @@ ssh "$ASU_HOST" "cat > '$DEST/.targets.json' && chmod 644 '$DEST/.targets.json'"
 {"$TARGET": "$ARCH"}
 TARGETS
 
-# 3c. Advertise the FULL upstream package set, not just the ~400 Mono-built packages,
-#     so owut/attended-sysupgrade can `-a` (add) and PRESERVE *any* upstream package
-#     across a rebuild - not only what Mono builds. owut's "available in target version"
-#     set is asu's synthesized arch index (/json/v1/<rel>/packages/<arch>-index.json),
-#     which asu builds by unioning the per-feed index.json files under our feed dir
-#     (settings.upstream_url = the internal http://upstream = /srv/asu-feed). A package
-#     absent there is "missing to-version, cannot upgrade" client-side, even though the
-#     IB could build it. So fold upstream's per-feed index.json into ours.
-#     INDEX-ONLY: we do NOT mirror .apks - the ImageBuilder still fetches the real apks
-#     from its appended downloads.openwrt.org feeds at build time (a build with an
-#     upstream-only package resolves + builds fine), so this only advertises availability.
-#     Precedence is upstream-wins on overlap, which within a frozen release equals
-#     highest-version-wins (Mono never exceeds upstream), so the advertised version
-#     matches exactly what the IB installs - no phantom out-of-date/downgrade from owut.
-#     Fail-closed: if the upstream index can't be fetched, refuse (don't ship a feed that
-#     silently can't resolve upstream packages); set -e -> the release tag is dropped.
-echo "publish-asu: folding upstream package index into the feed (owut availability)"
-ssh "$ASU_HOST" "VER='$VER' ARCH='$ARCH' python3 -" <<'MERGE'
-import json, os, sys, urllib.request
-V = os.environ["VER"]; A = os.environ["ARCH"]
-UP = f"https://downloads.openwrt.org/releases/{V}/packages/{A}"
-BASE = f"/srv/asu-feed/releases/{V}/packages/{A}"
-FEEDS = ["base", "luci", "packages", "routing", "telephony", "video"]
-
-def fetch(url):
-    try:
-        with urllib.request.urlopen(url, timeout=90) as r:
-            return json.load(r).get("packages", {})
-    except Exception as e:
-        print(f"  WARN fetch {url}: {e}", file=sys.stderr)
-        return {}
-
-# Fetch everything first; only touch the feed if upstream actually answered, so a
-# transient upstream outage fails the release instead of shipping a gutted index.
-up = {f: fetch(f"{UP}/{f}/index.json") for f in FEEDS}
-up_total = sum(len(v) for v in up.values())
-if up_total < 1000:   # a healthy union is ~9800; <1000 means upstream broadly failed
-    print(f"publish-asu: upstream index fetch returned only {up_total} pkgs - refusing", file=sys.stderr)
-    sys.exit(1)
-
-before = after = 0
-for f in FEEDS:
-    d = f"{BASE}/{f}"; os.makedirs(d, exist_ok=True); lp = f"{d}/index.json"
-    mono = {}
-    if os.path.exists(lp):
-        try: mono = json.load(open(lp)).get("packages", {})
-        except Exception: mono = {}
-    merged = {**mono, **up[f]}   # upstream-wins == highest-wins (verified)
-    json.dump({"version": 2, "architecture": A, "packages": merged}, open(lp, "w"))
-    os.chmod(lp, 0o644)
-    before += len(mono); after += len(merged)
-print(f"  advertised packages: {before} (Mono) -> {after} (Mono + upstream)")
-MERGE
+# 3c. (The FULL upstream package set is advertised to owut - so it can `-a`/preserve any
+#      of the ~9000 upstream packages across a rebuild - by the HIGHEST-WINS fold in step
+#      1a above, which merges upstream's per-feed index.json into the mono index BEFORE the
+#      rsync. owut's "available in target version" set is asu's synthesized arch index
+#      (/json/v1/<rel>/packages/<arch>-index.json), which asu unions from the per-feed
+#      index.json under our served feed dir (settings.upstream_url = http://upstream =
+#      /srv/asu-feed) - so shipping the merged index.json via the rsync IS what populates
+#      it. INDEX-ONLY: we do NOT mirror upstream .apks; the IB fetches those from its
+#      appended downloads.openwrt.org feeds at build time. The fold lives on the build box,
+#      not here, because highest-wins needs `apk version` and groot has no apk.)
 
 # 4. bust the asu build cache (redis job/result cache + the built-image store) so a
 #    repeated request can't be served a pre-refresh (stale-revision) image.
