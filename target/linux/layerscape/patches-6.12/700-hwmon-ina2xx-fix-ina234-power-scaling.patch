@@ -1,0 +1,34 @@
+hwmon: (ina2xx) fix INA234 power register scaling (16x too high)
+
+INA234 is a 12-bit part. The driver scales current_lsb up by
+2^current_shift and shifts the current/shunt/bus registers back down on
+read, but the power register is read unshifted. power_lsb therefore keeps
+the extra 2^current_shift factor, so power*_input reads 16x too high on
+INA234 while current and the voltages read correctly.
+
+Remove the factor from power_lsb in ina2xx_set_shunt(). current_shift is 0
+for the 16-bit parts (INA219/226/260), so they are unaffected.
+
+Signed-off-by: Tomaz Zaman <tomaz@zaman.io>
+---
+--- a/drivers/hwmon/ina2xx.c
++++ b/drivers/hwmon/ina2xx.c
+@@ -881,8 +881,16 @@ static int ina2xx_set_shunt(struct ina2x
+ 
+ 	data->rshunt = val;
+ 	data->current_lsb_uA = DIV_ROUND_CLOSEST(dividend, val);
+-	data->power_lsb_uW = data->config->power_lsb_factor *
+-			     data->current_lsb_uA;
++	/*
++	 * For 12-bit parts (INA234) current_lsb is scaled up by
++	 * 2^current_shift and the current/voltage registers are shifted back
++	 * down on read; the power register is read unshifted, so the same
++	 * factor has to be removed from power_lsb here or power reads
++	 * 2^current_shift too high (16x on INA234). current_shift is 0 for the
++	 * 16-bit parts, so they are unaffected.
++	 */
++	data->power_lsb_uW = (data->config->power_lsb_factor *
++			      data->current_lsb_uA) >> data->config->current_shift;
+ 
+ 	return 0;
+ }
