@@ -257,25 +257,55 @@ platform_do_upgrade_mono() {
 		echo "Refusing: could not set boot slot to ${new_slot}; keeping current slot"; return 1; }
 	mono-fw-setenv bootcount 0        || echo "Warning: could not reset bootcount"
 	mono-fw-setenv upgrade_available 1 || echo "Warning: could not arm rollback (upgrade_available); new slot boots without auto-rollback"
-	# The new slot's first-boot uci-default re-expands the 384M rootfs to fill its
-	# partition. sysupgrade now reboots into slot ${new_slot}; if it fails to boot
-	# bootlimit times, U-Boot's altbootcmd flips back to the good slot. Migration of
-	# an old 2-partition unit still happens on first boot (05-mono-gateway-migrate).
+	# sysupgrade now reboots into slot ${new_slot}; if it fails to boot bootlimit
+	# times, U-Boot's altbootcmd flips back to the good slot. A squashfs slot brings
+	# up its rw overlay in the slot tail automatically on first boot (fstools);
+	# migration of an old 2-partition unit still happens (05-mono-gateway-migrate).
 }
 
 platform_copy_config_mono() {
-	# The config backup must land on the slot we just wrote (the INACTIVE slot),
-	# so the new slot restores it on first boot - NOT the running slot.
+	# The config backup must land on the slot we just wrote (the INACTIVE slot), so
+	# the NEW slot restores it on first boot - NOT the running slot. HOW to place it
+	# depends on the filesystem we just wrote there, so probe the slot, never assume:
+	#   squashfs (read-only) - there is no mountable rw root. Stock squashfs restore
+	#     expects the backup dd'd at the 64 KiB-aligned offset right after the squashfs
+	#     image (where libfstools starts the rw overlay, ROOTDEV_OVERLAY_ALIGN); on
+	#     first boot fstools brings up the overlay and 80_mount_root finds
+	#     /sysupgrade.tgz there and restores it.
+	#   ext4 (writable) - mount it and drop sysupgrade.tgz at the rootfs root, which
+	#     80_mount_root restores directly.
+	# Getting this wrong (e.g. mount -t ext4 on a squashfs slot) silently drops the
+	# backup, so the new slot boots default config - hence the explicit failures below.
 	local ab rootpart
 	ab="$(mono_gateway_inactive_slot)" || {
 		echo "Could not determine the inactive A/B slot for config backup"; return 1; }
 	set -- $ab
 	rootpart="$3"			# fields: <new_slot> <bootpart> <rootpart> ...
-	mkdir -p /tmp/new_root
-	if mount -t ext4 -o rw,noatime "$rootpart" /tmp/new_root; then
-		echo "Saving config backup to the new slot rootfs ($rootpart)..."
-		cp -af "$UPGRADE_BACKUP" /tmp/new_root/sysupgrade.tgz
-		umount /tmp/new_root
+
+	# squashfs LE superblock magic 'hsqs' = 68 73 71 73 at offset 0.
+	local magic
+	magic=$(dd if="$rootpart" bs=4 count=1 2>/dev/null | hexdump -v -n4 -e '1/1 "%02x"')
+	if [ "$magic" = "68737173" ]; then
+		# bytes_used is a u64 at offset 40; its low 32 bits suffice (image << 4 GiB).
+		# Round up to the 64 KiB overlay alignment (128 x 512-byte blocks) - the same
+		# offset libfstools uses for the overlay start - then place the backup there.
+		local bytes_used blocks
+		bytes_used=$(dd if="$rootpart" bs=1 skip=40 count=4 2>/dev/null | hexdump -v -n4 -e '1/4 "%u"')
+		[ -n "$bytes_used" ] && [ "$bytes_used" -gt 0 ] || {
+			echo "Could not read squashfs size from $rootpart; config NOT saved"; return 1; }
+		blocks=$(( ((bytes_used + 65535) / 65536) * 128 ))
+		echo "Saving config backup after the squashfs on the new slot ($rootpart, +${blocks} blocks)..."
+		dd if="$UPGRADE_BACKUP" of="$rootpart" bs=512 seek="$blocks" conv=fsync || {
+			echo "Config backup write to $rootpart failed"; return 1; }
+	else
+		mkdir -p /tmp/new_root
+		if mount -t ext4 -o rw,noatime "$rootpart" /tmp/new_root; then
+			echo "Saving config backup to the new slot rootfs ($rootpart)..."
+			cp -af "$UPGRADE_BACKUP" /tmp/new_root/sysupgrade.tgz
+			umount /tmp/new_root
+		else
+			echo "Could not mount new slot $rootpart as ext4; config NOT saved"; return 1
+		fi
 	fi
 }
 

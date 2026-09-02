@@ -523,6 +523,15 @@
 ;; default conf.file (searchable); only the file needs the private type.
 (in envtools.conf
     (filecon "/etc/fw_env\.d/emmc" file file_context))
+;; ...and cover the A/B sysupgrade stage2 case. platform.sh lists the eMMC env
+;; config in RAMFS_COPY_DATA, so during a slot-switch upgrade fw_setenv reads it
+;; from the stage2 ramfs, where it lands as the generic conf.file type on tmpfs
+;; (dev=tmpfs, tcontext=conf.file) - NOT the on-disk envtools.conf.file relabelled
+;; above. Give envtools.printenv.subj the generic conf-file read interface (the
+;; same .conf.read_file_files idiom used for wget et al.) so the read/open is
+;; allowed there too; without it every A/B sysupgrade denies fw_setenv on tmpfs.
+(in envtools.printenv
+    (call .conf.read_file_files (subj)))
 
 ;; ===========================================================================
 ;; mono A/B — label the persistent /data mountpoint so block can mount it
