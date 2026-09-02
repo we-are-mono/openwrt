@@ -56,9 +56,9 @@ echo "=== publish-asu: $ASU_URL <- version $VER, revision $WANT ==="
 #     build box - groot has no apk. Fail-closed: refuse if upstream can't be fetched.
 echo "publish-asu: folding upstream package index into the feed (highest-version-wins)"
 TOP="$PWD"
-VER="$VER" ARCH="$ARCH" BIN="$BIN" APK="$TOP/staging_dir/host/bin/apk" python3 - <<'MERGE'
+VER="$VER" ARCH="$ARCH" BIN="$BIN" APK="$TOP/staging_dir/host/bin/apk" MKINDEX="$TOP/scripts/make-index-json.py" python3 - <<'MERGE'
 import json, os, subprocess, sys, urllib.request, functools
-V = os.environ["VER"]; A = os.environ["ARCH"]; BIN = os.environ["BIN"]; APK = os.environ["APK"]
+V = os.environ["VER"]; A = os.environ["ARCH"]; BIN = os.environ["BIN"]; APK = os.environ["APK"]; MKINDEX = os.environ["MKINDEX"]
 UP = f"https://downloads.openwrt.org/releases/{V}/packages/{A}"
 BASE = f"{BIN}/packages/{A}"
 FEEDS = ["base", "luci", "packages", "routing", "telephony", "video"]
@@ -79,6 +79,21 @@ def fetch(url):
         print(f"  WARN fetch {url}: {e}", file=sys.stderr)
         return {}
 
+def mono_base(subdir):
+    # Pure-mono {name: version} for a feed subdir, derived FRESH from packages.adb (the
+    # signed apks - the immutable source of truth), NOT from index.json, because this
+    # script also WRITES index.json (the merged result). Reading index.json back would
+    # let a repeated run fold upstream into an already-merged base and inflate it; sourcing
+    # from packages.adb keeps the fold idempotent no matter how many times it runs.
+    adb = f"{BASE}/{subdir}/packages.adb"
+    if not os.path.exists(adb):
+        return {}   # subdirs with no mono apks (routing/telephony/video) are upstream-only
+    dump = subprocess.run([APK, "adbdump", "--format", "json", adb],
+                          capture_output=True, text=True).stdout
+    idx = subprocess.run([MKINDEX, "-f", "apk", "-a", A, "-"],
+                         input=dump, capture_output=True, text=True).stdout
+    return json.loads(idx).get("packages", {})
+
 # Fetch all upstream feeds first; only touch the local index if upstream answered, so a
 # transient upstream outage fails the release instead of shipping a gutted index.
 up = {f: fetch(f"{UP}/{f}/index.json") for f in FEEDS}
@@ -90,10 +105,7 @@ if up_total < 1000:   # a healthy union is ~9800; <1000 means upstream broadly f
 before = after = 0
 for f in FEEDS:
     d = f"{BASE}/{f}"; os.makedirs(d, exist_ok=True); lp = f"{d}/index.json"
-    mono = {}
-    if os.path.exists(lp):
-        try: mono = json.load(open(lp)).get("packages", {})
-        except Exception: mono = {}
+    mono = mono_base(f)                         # pure mono from packages.adb (idempotent)
     merged = dict(up[f])                       # start from upstream
     for name, mver in mono.items():            # then let mono win only when it is >= upstream
         uver = up[f].get(name)
