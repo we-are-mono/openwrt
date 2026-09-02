@@ -1,0 +1,41 @@
+#!/bin/sh
+# First-boot: write the backup GPT to the end of the eMMC from the blob shipped
+# in the boot partition, so the on-disk table is complete and partition tools do
+# not "repair" a half-present GPT. (The rootfs is now read-only squashfs - no
+# grow-on-first-boot; the writable overlay is p5, prepared in preinit by
+# 78_mono_overlay_prep.) uci-defaults self-delete on exit 0; this exits NON-zero
+# to retry next boot until the backup GPT is confirmed present, and is idempotent.
+. /lib/functions.sh
+
+case "$(board_name)" in
+mono,gateway-dk) ;;
+*) exit 0 ;;
+esac
+
+disk=/dev/mmcblk0
+sysfs=/sys/block/mmcblk0/size          # size in 512-byte sectors (no tools)
+rc=0
+
+sectors=$(cat "$sysfs" 2>/dev/null)
+if [ -z "$sectors" ]; then
+	logger -t mono-firstboot "no $sysfs, deferring backup GPT"
+	rc=1
+elif [ "$(dd if="$disk" bs=512 skip=$((sectors - 1)) count=1 2>/dev/null | head -c 8)" = "EFI PART" ]; then
+	:                                      # already present
+elif [ -b /dev/mmcblk0p1 ] && mkdir -p /tmp/bootp && \
+     mount -t ext4 -o ro /dev/mmcblk0p1 /tmp/bootp 2>/dev/null; then
+	if [ -f /tmp/bootp/boot/backup-gpt.bin ] && \
+	   dd if=/tmp/bootp/boot/backup-gpt.bin of="$disk" \
+	      bs=512 seek=$((sectors - 33)) conv=fsync 2>/dev/null; then
+		logger -t mono-firstboot "backup GPT written at sector $((sectors - 33))"
+	else
+		logger -t mono-firstboot "backup GPT write failed"
+		rc=1
+	fi
+	umount /tmp/bootp 2>/dev/null
+else
+	logger -t mono-firstboot "cannot mount boot partition, deferring backup GPT"
+	rc=1
+fi
+
+exit $rc

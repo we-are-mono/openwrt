@@ -68,7 +68,7 @@ CONFIG_PACKAGE_telnet-bsd=y
 # nothing in the mono recipe (and the board is not an RDB) — removed as dead weight.
 # CONFIG_TARGET_IMAGES_GZIP is not set
 CONFIG_TARGET_ROOTFS_PARTSIZE=256
-# CONFIG_TARGET_ROOTFS_SQUASHFS is not set
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
 # SELinux — permissive skeleton. CONFIG_SELINUX=y cascades the
 # kernel LSM bits, swaps in procd-selinux/busybox-selinux, and pulls the dssp
 # base policy. The rootfs is held permissive via `enforcing=0` on the kernel

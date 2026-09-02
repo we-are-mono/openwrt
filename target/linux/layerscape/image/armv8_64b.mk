@@ -437,23 +437,20 @@ endef
 define Build/mono-emmc-img
 	rm -f $@
 	./gen_mono_emmc_img.sh $@ $@.bootfs $(IMAGE_ROOTFS) \
-		$(MONO_BOOTFS_SIZE) $(MONO_ROOTFS_PART) $(MONO_EMMC_SECTORS) $(MONO_ROOTFS_STAGE)
+		$(MONO_BOOTFS_SIZE) $(MONO_ROOTFS_PART) $(MONO_EMMC_SECTORS)
 endef
 
-# Same resize-metadata prep as the eMMC image (make_ext4fs output
-# cannot be grown online); the boot partition blob travels as the
-# "kernel" member so dtb and extlinux.conf always match the kernel.
+# squashfs rootfs: read-only + fixed-size, so no resize-metadata prep and no
+# grow-on-first-boot. The rootfs member is the squashfs as-built ($(IMAGE_ROOTFS));
+# the A/B slot write (platform.sh mono_dd_member) is format-agnostic. The boot
+# partition blob travels as the "kernel" member so dtb/extlinux.conf match the kernel.
+# The writable overlay is on /data (p5) via stock fstools extroot (etc/config/fstab).
 define Build/mono-sysupgrade
-	cp $(IMAGE_ROOTFS) $@.rootfs
-	e2fsck -fy $@.rootfs || true
-	truncate -s $(MONO_ROOTFS_STAGE)M $@.rootfs
-	resize2fs $@.rootfs
 	sh $(TOPDIR)/scripts/sysupgrade-tar.sh \
 		--board $(subst _,$(comma),$(DEVICE_NAME)) \
 		--kernel $@.bootfs \
-		--rootfs $@.rootfs \
+		--rootfs $(IMAGE_ROOTFS) \
 		$@
-	rm -f $@.rootfs
 endef
 
 define Device/mono_gateway-dk
@@ -496,19 +493,18 @@ define Device/mono_gateway-dk
 	policycoreutils policycoreutils-setfiles policycoreutils-sestatus
   KERNEL_NAME := Image
   KERNEL := kernel-bin | gzip
-  FILESYSTEMS := ext4
+  # Read-only squashfs rootfs (per A/B slot). The writable overlay lives on /data
+  # (p5) via stock fstools extroot (etc/config/fstab) - so root is immutable, images
+  # are compressed (smaller/faster OTA), and there is NO fixed-size ext4 to
+  # mis-size (this removes the resize2fs step that 500'd owut builds). squashfs
+  # auto-fits the content; the 1 GiB slot just has to be >= it (it is, ~10x).
+  FILESYSTEMS := squashfs
   # A/B + persistent-data eMMC layout (see mono_gpt.py): two 1 GiB rootfs slots
   # (rootA=p2 keeps the pre-A/B start sector), two 64 MiB boot slots, and /data
   # (p5) filling the rest (~27.5 GiB). MONO_ROOTFS_PART is the PER-SLOT size.
   MONO_BOOTFS_SIZE := 64
   MONO_ROOTFS_PART := 1024
   MONO_EMMC_SECTORS := 62160896
-  # Build-time rootfs staging size (MiB): the ext4 is truncated to this then
-  # resize2fs'd down to it, and grown to fill the 1 GiB slot (MONO_ROOTFS_PART)
-  # on first boot. Must exceed the actual rootfs content. The r11 lean base is
-  # ~84M, so 256 gives ~3x headroom. Keep it comfortably below MONO_ROOTFS_PART;
-  # bump if the base image grows.
-  MONO_ROOTFS_STAGE := 256
   # Keep the -sdboot alias: units flashed before 02_sysinfo_fixup stopped
   # appending it still report mono,gateway-dk-sdboot at runtime, and sysupgrade
   # refuses an image whose SUPPORTED_DEVICES lacks the running board name.

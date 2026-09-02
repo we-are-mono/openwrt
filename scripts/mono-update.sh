@@ -219,8 +219,8 @@ mkdir -p "$OUT"
 # so published files are just layerscape-armv8_64b-mono_gateway-dk-*. The strip
 # is mirrored into the latest.json builder below (pick()), which resolves
 # profiles.json's build-names against these staged names.
-for f in "$BINDIR"/*-layerscape-armv8_64b-mono_*-ext4-emmc.img.gz \
-         "$BINDIR"/*-layerscape-armv8_64b-mono_*-ext4-sysupgrade.bin \
+for f in "$BINDIR"/*-layerscape-armv8_64b-mono_*-emmc.img.gz \
+         "$BINDIR"/*-layerscape-armv8_64b-mono_*-sysupgrade.bin \
          "$BINDIR"/*-layerscape-armv8_64b-mono_*.manifest; do
 	cp "$f" "$OUT/$(basename "$f" | sed -E 's/^.*(layerscape-armv8_64b-)/\1/')"
 done
