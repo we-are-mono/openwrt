@@ -59,6 +59,9 @@ jobs:
       - name: Install Nix (flakes enabled)
         uses: DeterminateSystems/nix-installer-action@main
 
+      - name: Allow Nix FHS user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Build image
         run: |
           set -euo pipefail
@@ -81,11 +84,11 @@ jobs:
         run: |
           set -euo pipefail
           D=bin/targets/layerscape/armv8_64b
-          SYS=$(find "$D" -maxdepth 1 -name 'mono-*-mono_gateway-dk-ext4-sysupgrade.bin' ! -name '*-legacy*' | head -1)
+          SYS=$(find "$D" -maxdepth 1 -name 'mono-*-mono_gateway-dk-squashfs-sysupgrade.bin' ! -name '*-legacy*' | head -1)
           test -n "$SYS" || { echo "no sysupgrade image built" >&2; ls -la "$D" >&2; exit 1; }
           echo "dir=$D" >> "$GITHUB_OUTPUT"
           echo "### Built image" >> "$GITHUB_STEP_SUMMARY"
-          ( cd "$D" && sha256sum mono-*-mono_gateway-dk-ext4-* *.manifest 2>/dev/null ) | tee -a "$GITHUB_STEP_SUMMARY"
+          ( cd "$D" && sha256sum mono-*-mono_gateway-dk-squashfs-* *.manifest 2>/dev/null ) | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload image artifacts
         uses: actions/upload-artifact@v4
@@ -94,7 +97,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            ${{ steps.img.outputs.dir }}/mono-*-mono_gateway-dk-ext4-sysupgrade.bin
-            ${{ steps.img.outputs.dir }}/mono-*-mono_gateway-dk-ext4-emmc.img.gz
+            ${{ steps.img.outputs.dir }}/mono-*-mono_gateway-dk-squashfs-sysupgrade.bin
+            ${{ steps.img.outputs.dir }}/mono-*-mono_gateway-dk-squashfs-emmc.img.gz
             ${{ steps.img.outputs.dir }}/mono-*-mono_gateway-dk.manifest
             ${{ steps.img.outputs.dir }}/sha256sums
