@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # Full history + tags: the tree's revision (DISTRIB_REVISION, image
           # name) is derived from git by scripts/getver.sh.
@@ -57,7 +57,7 @@ jobs:
           df -h /
 
       - name: Install Nix (flakes enabled)
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
       - name: Allow Nix FHS user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -91,7 +91,7 @@ jobs:
           ( cd "$D" && sha256sum mono-*-mono_gateway-dk-squashfs-* *.manifest 2>/dev/null ) | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload image artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mono_gateway-dk-images
           if-no-files-found: error
