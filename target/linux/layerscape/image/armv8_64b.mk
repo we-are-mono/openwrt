@@ -479,7 +479,7 @@ define Device/mono_gateway-dk
   DEVICE_PACKAGES := fmc \
 	kmod-ask-cdx kmod-ask-fci kmod-ask-auto-bridge cmm cmmqos dpa-app \
 	kmod-nxp-mwifiex nxp-wifi-firmware-9098-pcie wpad-openssl iw usteer luci-app-usteer \
-	kmod-leds-lp5812 kmod-sfp-led fancontrol lm-sensors irqbalance \
+	kmod-leds-lp5812 kmod-sfp-led lm-sensors irqbalance \
 	kmod-i2c-core kmod-hwmon-core kmod-hwmon-ina2xx kmod-hwmon-lm90 \
 	kmod-regmap-core kmod-regmap-i2c i2csfp i2c-tools usbutils pciutils \
 	luci-light libustream-mbedtls px5g-mbedtls -luci-app-package-manager \
