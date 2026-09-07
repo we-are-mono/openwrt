@@ -1,0 +1,47 @@
+--- a/drivers/net/ethernet/freescale/sdk_dpaa/dpaa_eth_sg.c
++++ b/drivers/net/ethernet/freescale/sdk_dpaa/dpaa_eth_sg.c
+@@ -868,6 +868,10 @@
+ 	unsigned char *buffer_start;
+ 	int dma_map_size;
+ 
++	/* Tx confirmation reads a backpointer from tx_headroom. */
++	if (WARN_ON_ONCE(skb_headroom(skb) < priv->tx_headroom))
++		return -EINVAL;
++
+ #ifndef CONFIG_FSL_DPAA_TS
+ 	/* Check recycling conditions; only if timestamp support is not
+ 	 * enabled, otherwise we need the fd back on tx confirmation
+@@ -2179,7 +2183,15 @@
+ 		 * data, parse results, etc. Normally this shouldn't happen if
+ 		 * we're here via the standard kernel stack.
+ 		 */
+-		if (unlikely(skb_headroom(skb) < priv->tx_headroom)) {
++		if (skb_cloned(skb) && !skb_need_wa) {
++			/*
++			 * skb_to_contig_fd() stores private data in headroom. Make
++			 * it writable and reserve tx_headroom without skb_copy().
++			 */
++			if (unlikely(skb_cow_head(skb, priv->tx_headroom)))
++				goto enomem;
++			skb_changed = true;
++		} else if (unlikely(skb_headroom(skb) < priv->tx_headroom)) {
+ 			struct sk_buff *skb_new;
+ 
+ 			skb_new = skb_realloc_headroom(skb, priv->tx_headroom);
+@@ -2206,15 +2218,7 @@
+ 		 * copying it here in that case.
+ 		 */
+ 
+-		/* Code borrowed from skb_unshare(). */
+-		if (skb_cloned(skb) && !skb_need_wa) {
+-			nskb = skb_copy(skb, GFP_ATOMIC);
+-			kfree_skb(skb);
+-			skb = nskb;
+-			skb_changed = true;
+-
+-			/* skb_copy() has now linearized the skbuff. */
+-		} else if (unlikely(nonlinear) && !skb_need_wa) {
++		if (unlikely(nonlinear) && !skb_need_wa) {
+ 			/* We are here because the egress skb contains
+ 			 * more fragments than we support. In this case,
+ 			 * we have no choice but to linearize it ourselves.
