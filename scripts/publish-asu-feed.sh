@@ -41,79 +41,128 @@ WANT=$(grep -oE '"version_code":"[^"]*"' "$TDIR/profiles.json" 2>/dev/null | hea
 DEST="/srv/asu-feed/releases/$VER"
 echo "=== publish-asu: $ASU_URL <- version $VER, revision $WANT ==="
 
-# 1a. Fold upstream's per-feed index.json into the mono feed index HERE (on the build
-#     box, where apk exists), HIGHEST-VERSION-WINS, then let the rsync below ship the
-#     merged index. owut reads this as its "available" set and it MUST equal what the
-#     imagebuilder actually installs. The IB carries BOTH repos - the local mono feed
-#     AND downloads.openwrt.org (see mono-ib-build/Containerfile) - both untagged, so
-#     apk installs the HIGHEST version of each package. Therefore the advertised version
-#     must be max(mono, upstream) per package: plain upstream-wins mis-advertised any
-#     package mono built ahead of the upstream release tag (e.g. owut r2 vs r1) -> the
-#     build 500s in check_manifest; plain mono-wins mis-advertised any package upstream
-#     carries ahead of mono's pinned feed (e.g. adblock/luci) -> owut reports a phantom
-#     downgrade and --force 500s. Only max() matches the IB. `apk version -t` is the
-#     authoritative comparator (~suffixes, -rN, epochs), which is why this runs on the
-#     build box - groot has no apk. Fail-closed: refuse if upstream can't be fetched.
-echo "publish-asu: folding upstream package index into the feed (highest-version-wins)"
+# 1a. MIRROR + MERGE upstream apks INTO the mono feed so the IB reads ONLY the mono groot
+#     feed (http://upstream) and never a live downloads.openwrt.org. WHY the change:
+#     the old model had the IB carry BOTH repos, untagged, so apk installed the HIGHEST
+#     version of each package. When upstream point-updates a package mono ALSO builds
+#     (e.g. the ucode family r1 -> r2 on the rolling 25.12.5 feed), stock's r2 shadowed
+#     mono's r1 - but a device is pinned to the r1 it was flashed with, so asu's
+#     check_manifest 500'd with "libucode version not as requested: r1 vs r2". Making mono
+#     AUTHORITATIVE ends the drift for good: mono wins EVERY overlap (we simply never place
+#     stock's copy of a name mono builds), and for packages mono does NOT build we mirror
+#     the exact upstream apk into the mono feed and re-sign the index with mono's key
+#     (the IB already trusts both mono's and openwrt-25.12's keys, and re-verifies each
+#     apk, so mono-signing the index over mixed apks is safe). One origin, no live upstream
+#     at build time, no version race. It also gives routing/telephony/video a real
+#     packages.adb (they had none -> "wget error 8"), and folds the target userspace feed
+#     (iptables-mod-* etc.) in the same way. Fail-closed: refuse if upstream is unreachable.
+#     The mirror is a persistent, incremental cache (only new apks download); the assembled
+#     feed is rebuilt each run from hardlinks (cheap) so re-runs are idempotent.
+echo "publish-asu: mirroring + merging upstream apks into the mono feed (mono-authoritative)"
 TOP="$PWD"
-VER="$VER" ARCH="$ARCH" BIN="$BIN" APK="$TOP/staging_dir/host/bin/apk" MKINDEX="$TOP/scripts/make-index-json.py" python3 - <<'MERGE'
-import json, os, subprocess, sys, urllib.request, functools
-V = os.environ["VER"]; A = os.environ["ARCH"]; BIN = os.environ["BIN"]; APK = os.environ["APK"]; MKINDEX = os.environ["MKINDEX"]
-UP = f"https://downloads.openwrt.org/releases/{V}/packages/{A}"
-BASE = f"{BIN}/packages/{A}"
-FEEDS = ["base", "luci", "packages", "routing", "telephony", "video"]
+MIRROR="${ASU_MIRROR:-$TOP/../asu-upstream-mirror}"   # persistent stock-apk cache
+FEEDOUT="${ASU_FEEDOUT:-$TOP/../asu-feedout}"          # assembled feed (rebuilt each run)
+VER="$VER" ARCH="$ARCH" TARGET="$TARGET" BIN="$BIN" TDIR="$TDIR" \
+  APK="$TOP/staging_dir/host/bin/apk" MKINDEX="$TOP/scripts/make-index-json.py" \
+  KEY="$TOP/private-key.pem" MIRROR="$MIRROR" FEEDOUT="$FEEDOUT" \
+  SELFTEST_LIMIT="${SELFTEST_LIMIT:-0}" python3 - <<'MERGE'
+import json, os, shutil, subprocess, sys, tempfile, urllib.request
+V=os.environ["VER"]; A=os.environ["ARCH"]; T=os.environ["TARGET"]
+BIN=os.environ["BIN"]; TDIR=os.environ["TDIR"]; APK=os.environ["APK"]; MKINDEX=os.environ["MKINDEX"]
+KEY=os.environ["KEY"]; MIRROR=os.environ["MIRROR"]; FEEDOUT=os.environ["FEEDOUT"]
+LIMIT=int(os.environ.get("SELFTEST_LIMIT","0"))   # 0 = mirror the full feed; >0 caps for self-test
+REL=f"https://downloads.openwrt.org/releases/{V}"
+ARCHFEEDS=["base","luci","packages","routing","telephony","video"]
 
-@functools.lru_cache(maxsize=None)
-def a_gt_b(a, b):
-    # True iff apk considers version a strictly greater than b.
-    if a == b:
-        return False
-    return subprocess.run([APK, "version", "-t", a, b],
-                          capture_output=True, text=True).stdout.strip() == ">"
+def adb_names(adb_path):
+    # {real_pkg_name: version} from a packages.adb, via adbdump. REAL names (e.g.
+    # libucode20230711) - NOT the provides names that index.json collapses to (libucode).
+    # The apk FILENAME uses the real name, so downloads AND the mono-vs-stock overlap must
+    # both key on it. Reading mono's pristine build packages.adb here (never regenerated in
+    # place) keeps the run idempotent. Empty for feeds/paths with no packages.adb.
+    if not adb_path or not os.path.exists(adb_path): return {}
+    out=subprocess.run([APK,"adbdump","--format","json",adb_path],capture_output=True,text=True).stdout
+    try: pkgs=json.loads(out).get("packages",[])
+    except json.JSONDecodeError: return {}
+    return {p["name"]: p["version"] for p in pkgs if p.get("name") and p.get("version")}
 
-def fetch(url):
+def fetch_up(feed_url):
+    # upstream {real_name: version}: fetch the feed's signed packages.adb and adbdump it
+    # (same real-name basis as mono's, so overlap detection and filenames line up).
     try:
-        with urllib.request.urlopen(url, timeout=90) as r:
-            return json.load(r).get("packages", {})
+        with urllib.request.urlopen(f"{feed_url}/packages.adb", timeout=90) as r:
+            data=r.read()
     except Exception as e:
-        print(f"  WARN fetch {url}: {e}", file=sys.stderr)
-        return {}
+        print(f"  WARN fetch {feed_url}/packages.adb: {e}", file=sys.stderr); return {}
+    with tempfile.NamedTemporaryFile(suffix=".adb", delete=False) as tf:
+        tf.write(data); tmp=tf.name
+    try: return adb_names(tmp)
+    finally:
+        try: os.unlink(tmp)
+        except OSError: pass
 
-def mono_base(subdir):
-    # Pure-mono {name: version} for a feed subdir, derived FRESH from packages.adb (the
-    # signed apks - the immutable source of truth), NOT from index.json, because this
-    # script also WRITES index.json (the merged result). Reading index.json back would
-    # let a repeated run fold upstream into an already-merged base and inflate it; sourcing
-    # from packages.adb keeps the fold idempotent no matter how many times it runs.
-    adb = f"{BASE}/{subdir}/packages.adb"
-    if not os.path.exists(adb):
-        return {}   # subdirs with no mono apks (routing/telephony/video) are upstream-only
-    dump = subprocess.run([APK, "adbdump", "--format", "json", adb],
-                          capture_output=True, text=True).stdout
-    idx = subprocess.run([MKINDEX, "-f", "apk", "-a", A, "-"],
-                         input=dump, capture_output=True, text=True).stdout
-    return json.loads(idx).get("packages", {})
+def link(src,dst):
+    try: os.link(src,dst)
+    except FileExistsError: pass
+    except OSError: shutil.copy2(src,dst)      # cross-device fallback
 
-# Fetch all upstream feeds first; only touch the local index if upstream answered, so a
-# transient upstream outage fails the release instead of shipping a gutted index.
-up = {f: fetch(f"{UP}/{f}/index.json") for f in FEEDS}
-up_total = sum(len(v) for v in up.values())
-if up_total < 1000:   # a healthy union is ~9800; <1000 means upstream broadly failed
-    print(f"publish-asu: upstream index fetch returned only {up_total} pkgs - refusing", file=sys.stderr)
-    sys.exit(1)
+def dl(url,dest):
+    tmp=dest+".part"
+    try:
+        urllib.request.urlretrieve(url,tmp); os.replace(tmp,dest); return True
+    except Exception as e:
+        try: os.unlink(tmp)
+        except OSError: pass
+        print(f"  WARN download {url}: {e}", file=sys.stderr); return False
 
-before = after = 0
-for f in FEEDS:
-    d = f"{BASE}/{f}"; os.makedirs(d, exist_ok=True); lp = f"{d}/index.json"
-    mono = mono_base(f)                         # pure mono from packages.adb (idempotent)
-    merged = dict(up[f])                       # start from upstream
-    for name, mver in mono.items():            # then let mono win only when it is >= upstream
-        uver = up[f].get(name)
-        merged[name] = mver if (uver is None or a_gt_b(mver, uver)) else uver
-    json.dump({"version": 2, "architecture": A, "packages": merged}, open(lp, "w"))
-    os.chmod(lp, 0o644)
-    before += len(mono); after += len(merged)
-print(f"  advertised packages: {before} (Mono) -> {after} (Mono + upstream, highest-wins)")
+def build_feed(up_url, mono_dir, mirror_dir, out_dir):
+    up=fetch_up(up_url)
+    mono=set(adb_names(os.path.join(mono_dir,"packages.adb")))
+    os.makedirs(mirror_dir,exist_ok=True)
+    if os.path.isdir(out_dir): shutil.rmtree(out_dir)
+    os.makedirs(out_dir,exist_ok=True)
+    # mono's own apks first - authoritative; mono wins every overlap because a name mono
+    # builds is excluded from the stock set below (its stock copy is never fetched/linked).
+    if os.path.isdir(mono_dir):
+        for fn in os.listdir(mono_dir):
+            if fn.endswith(".apk"): link(os.path.join(mono_dir,fn), os.path.join(out_dir,fn))
+    # stock apks for names mono does NOT build: mirror (cache) then link in.
+    want=[(n,v) for n,v in up.items() if n not in mono]
+    if LIMIT: want=want[:LIMIT]
+    stock=0
+    for n,v in want:
+        fn=f"{n}-{v}.apk"; cached=os.path.join(mirror_dir,fn)
+        if not os.path.exists(cached) and not dl(f"{up_url}/{fn}",cached): continue
+        link(cached, os.path.join(out_dir,fn)); stock+=1
+    # one mono-signed packages.adb over the assembled set + a matching index.json (so owut's
+    # advertised set == what the feed actually holds). --allow-untrusted: index-time only;
+    # the IB re-verifies each apk against its trusted keys at build time.
+    apks=[os.path.join(out_dir,f) for f in os.listdir(out_dir) if f.endswith(".apk")]
+    subprocess.run([APK,"mkndx","--allow-untrusted","--sign-key",KEY,
+                    "--output",os.path.join(out_dir,"packages.adb"),*apks],
+                   check=True,capture_output=True,text=True)
+    dump=subprocess.run([APK,"adbdump","--format","json",os.path.join(out_dir,"packages.adb")],
+                        capture_output=True,text=True).stdout
+    idx=subprocess.run([MKINDEX,"-f","apk","-a",A,"-"],input=dump,capture_output=True,text=True).stdout
+    open(os.path.join(out_dir,"index.json"),"w").write(idx)
+    return len(mono),stock,len(apks)
+
+# Fail-closed: refuse the whole publish if upstream is broadly unreachable, so a transient
+# upstream outage can't ship a gutted (mono-only) feed.
+union=sum(len(fetch_up(f"{REL}/packages/{A}/{f}")) for f in ARCHFEEDS)
+if union < 1000:
+    print(f"publish-asu: upstream package union only {union} pkgs - refusing", file=sys.stderr); sys.exit(1)
+
+tm=ts=ta=0
+for f in ARCHFEEDS:
+    m,s,a=build_feed(f"{REL}/packages/{A}/{f}", f"{BIN}/packages/{A}/{f}",
+                     f"{MIRROR}/packages/{A}/{f}", f"{FEEDOUT}/packages/{A}/{f}")
+    print(f"  {f:9s}: mono={m} +stock={s} = {a}"); tm+=m; ts+=s; ta+=a
+# target userspace + kmods feed, same treatment (brings iptables-mod-* etc. under mono).
+m,s,a=build_feed(f"{REL}/targets/{T}/packages", f"{TDIR}/packages",
+                 f"{MIRROR}/targets/{T}/packages", f"{FEEDOUT}/targets/{T}/packages")
+print(f"  target   : mono={m} +stock={s} = {a}"); tm+=m; ts+=s; ta+=a
+print(f"  feed assembled: {tm} mono + {ts} stock = {ta} apks (mono-authoritative, mono-signed)")
 MERGE
 
 # 1. ship the IB tarball + rebuild the IB container (asu's rootless podman, uid 987).
@@ -130,10 +179,14 @@ REMOTE
 #         + the target profiles.json the revision endpoint reads.
 # A brand-new version dir has no parents yet, and rsync won't create multiple missing
 # path levels without --mkpath - so make the tree first (idempotent for existing ones).
-ssh "$ASU_HOST" "mkdir -p '$DEST/packages/$ARCH' '$DEST/targets/$TARGET'"
-rsync -a --no-owner --no-group --chmod=D755,F644 "$BIN/packages/$ARCH/" "$ASU_HOST:$DEST/packages/$ARCH/"
-rsync -a --no-owner --no-group --chmod=D755,F644 "$TDIR/packages/"      "$ASU_HOST:$DEST/targets/$TARGET/packages/"
-rsync -a --no-owner --no-group --chmod=F644      "$TDIR/profiles.json"  "$ASU_HOST:$DEST/targets/$TARGET/profiles.json"
+# Ship the ASSEMBLED, mono-authoritative feed (mono apks + mirrored stock apks + the
+# mono-signed packages.adb/index.json built in 1a), NOT raw bin/ - that is what makes the
+# groot feed self-contained so the IB needs no live downloads.openwrt.org. Additive (no
+# --delete) so older apks a deployed device still pins stay re-installable.
+ssh "$ASU_HOST" "mkdir -p '$DEST/packages/$ARCH' '$DEST/targets/$TARGET/packages'"
+rsync -a --no-owner --no-group --chmod=D755,F644 "$FEEDOUT/packages/$ARCH/"          "$ASU_HOST:$DEST/packages/$ARCH/"
+rsync -a --no-owner --no-group --chmod=D755,F644 "$FEEDOUT/targets/$TARGET/packages/" "$ASU_HOST:$DEST/targets/$TARGET/packages/"
+rsync -a --no-owner --no-group --chmod=F644      "$TDIR/profiles.json"                "$ASU_HOST:$DEST/targets/$TARGET/profiles.json"
 
 # 3b. The ASU server's arch package-index endpoint (/json/v1/.../<arch>-index.json)
 #     discovers the per-arch feeds by reading a feeds.conf (asu util.parse_feeds_conf:
@@ -160,16 +213,16 @@ ssh "$ASU_HOST" "cat > '$DEST/.targets.json' && chmod 644 '$DEST/.targets.json'"
 {"$TARGET": "$ARCH"}
 TARGETS
 
-# 3c. (The FULL upstream package set is advertised to owut - so it can `-a`/preserve any
-#      of the ~9000 upstream packages across a rebuild - by the HIGHEST-WINS fold in step
-#      1a above, which merges upstream's per-feed index.json into the mono index BEFORE the
-#      rsync. owut's "available in target version" set is asu's synthesized arch index
-#      (/json/v1/<rel>/packages/<arch>-index.json), which asu unions from the per-feed
+# 3c. (The FULL package set is advertised to owut - so it can `-a`/preserve any upstream
+#      package across a rebuild - because step 1a now MIRRORS every upstream apk mono does
+#      not build INTO the served feed and regenerates each index.json from the assembled
+#      packages.adb. owut's "available in target version" set is asu's synthesized arch
+#      index (/json/v1/<rel>/packages/<arch>-index.json), which asu unions from the per-feed
 #      index.json under our served feed dir (settings.upstream_url = http://upstream =
-#      /srv/asu-feed) - so shipping the merged index.json via the rsync IS what populates
-#      it. INDEX-ONLY: we do NOT mirror upstream .apks; the IB fetches those from its
-#      appended downloads.openwrt.org feeds at build time. The fold lives on the build box,
-#      not here, because highest-wins needs `apk version` and groot has no apk.)
+#      /srv/asu-feed) - so shipping the assembled index.json via the rsync IS what populates
+#      it, and it now equals the apks the IB can actually install (all local, mono-signed).
+#      The IB no longer carries any downloads.openwrt.org feed - see mono-ib-build/
+#      Containerfile - so there is a single origin and stock can never shadow mono again.)
 
 # 4. bust the asu build cache (redis job/result cache + the built-image store) so a
 #    repeated request can't be served a pre-refresh (stale-revision) image.
