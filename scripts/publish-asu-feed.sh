@@ -118,23 +118,26 @@ def dl(url,dest):
         except OSError: pass
         print(f"  WARN download {url}: {e}", file=sys.stderr); return False
 
-def build_feed(up_url, mono_dir, mirror_dir, out_dir):
+def build_feed(up_url, mono_dir, mirror_dir, out_dir, do_union=True):
     up=fetch_up(up_url)
     mono=adb_names(os.path.join(mono_dir,"packages.adb"))   # {name: version}, for version compare
     os.makedirs(mirror_dir,exist_ok=True)
     if os.path.isdir(out_dir): shutil.rmtree(out_dir)
     os.makedirs(out_dir,exist_ok=True)
-    # Link mono's own apks first, then UNION in upstream's. We mirror the stock apk for any
-    # name mono does NOT build, AND for any name whose upstream version DIFFERS from mono's
-    # (mono's build can lag the rolling openwrt-25.12 feed). Both versions then sit in the
-    # feed and apk picks the HIGHEST: mono wins where it is ahead or distinct (ASK, kmods,
-    # mono-*, patched packages that bump their release), upstream wins where mono is merely
-    # behind - which stops us downgrading a device that already pulled the newer one. Not
-    # mono-wins-exclusive: that served mono's stale build and 38-downgraded a live device.
+    # Link mono's own apks first. Then, for a COMMUNITY feed (do_union), also mirror upstream's
+    # apk for any name mono does not build AND any name whose upstream version DIFFERS from
+    # mono's - both versions then sit in the feed and apk picks the highest, so upstream wins
+    # where mono merely lags the rolling openwrt-25.12 feed (no downgrading a device that
+    # already pulled the newer luci/adblock). For the BASE feed (do_union=False) we mirror only
+    # names mono does NOT build and NEVER a second version of a name mono builds: base/core
+    # packages are versioned by mono's own tree rev-count, INCOMPARABLE to upstream's
+    # (base-files "18" vs "1711"), and the profile pins mono's exact build - unioning
+    # upstream's higher number shadows it and 500s "base-files not as requested". So base =
+    # mono-authoritative; the community feeds union.
     if os.path.isdir(mono_dir):
         for fn in os.listdir(mono_dir):
             if fn.endswith(".apk"): link(os.path.join(mono_dir,fn), os.path.join(out_dir,fn))
-    want=[(n,v) for n,v in up.items() if n not in mono or mono[n]!=v]
+    want=[(n,v) for n,v in up.items() if n not in mono or (do_union and mono[n]!=v)]
     if LIMIT: want=want[:LIMIT]
     stock=0
     for n,v in want:
@@ -162,8 +165,11 @@ if union < 1000:
 
 tm=ts=ta=0
 for f in ARCHFEEDS:
+    # base = OpenWrt core, mono-versioned + profile-pinned -> mono-authoritative (no union);
+    # luci/packages/routing/telephony/video = community feeds with comparable versions -> union.
     m,s,a=build_feed(f"{REL}/packages/{A}/{f}", f"{BIN}/packages/{A}/{f}",
-                     f"{MIRROR}/packages/{A}/{f}", f"{FEEDOUT}/packages/{A}/{f}")
+                     f"{MIRROR}/packages/{A}/{f}", f"{FEEDOUT}/packages/{A}/{f}",
+                     do_union=(f!="base"))
     print(f"  {f:9s}: mono={m} +stock={s} = {a}"); tm+=m; ts+=s; ta+=a
 # target userspace + kmods feed, same treatment (brings iptables-mod-* etc. under mono).
 m,s,a=build_feed(f"{REL}/targets/{T}/packages", f"{TDIR}/packages",
