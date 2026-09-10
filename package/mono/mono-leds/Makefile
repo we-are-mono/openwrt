@@ -32,7 +32,7 @@ endef
 
 define KernelPackage/sfp-led/description
   Drives the SFP cage link/activity LEDs from module presence and
-  optical signal state (mono,sfp-led device tree node).
+  XFI PCS link state and packet counters (mono,sfp-led device tree node).
 endef
 
 define Build/Prepare
