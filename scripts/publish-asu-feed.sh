@@ -200,14 +200,23 @@ rsync -a --no-owner --no-group --chmod=F644      "$TDIR/profiles.json"          
 #     it takes field 2 of each line as a subdir name). The mono build's feed dir ships
 #     none, so without this the arch index is EMPTY and owut reports every arch package
 #     "missing to-version, cannot upgrade". The names MUST match the served subdirs
-#     (base/luci/packages/routing/telephony/video); the URLs are ignored by asu.
-ssh "$ASU_HOST" "cat > '$DEST/packages/$ARCH/feeds.conf' && chmod 644 '$DEST/packages/$ARCH/feeds.conf'" <<'FEEDS'
+#     (base/luci/packages/routing/telephony/video); the URLs are ignored by asu. We also
+#     PRESERVE any extra src-git line already in the file (e.g. a separately-deployed verso
+#     feed added by the deploy-verso flow) so a rewrite never drops it - keeping this script
+#     decoupled from those products: it names none of them, it just never clobbers them.
+ssh "$ASU_HOST" bash -s "$DEST/packages/$ARCH/feeds.conf" <<'FEEDS'
+F="$1"
+extra=$(grep '^src-git ' "$F" 2>/dev/null | grep -vE '^src-git (base|packages|luci|routing|telephony|video) ' || true)
+{ cat <<'STD'
 src-git base https://git.openwrt.org/openwrt/openwrt.git
 src-git packages https://git.openwrt.org/feed/packages.git
 src-git luci https://git.openwrt.org/project/luci.git
 src-git routing https://git.openwrt.org/feed/routing.git
 src-git telephony https://git.openwrt.org/feed/telephony.git
 src-git video https://github.com/openwrt/video.git
+STD
+[ -n "$extra" ] && printf '%s\n' "$extra"; } > "$F"
+chmod 644 "$F"
 FEEDS
 
 # 3b2. The overview's branch->targets map (which owut reads to know a version supports THIS
