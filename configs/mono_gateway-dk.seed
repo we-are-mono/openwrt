@@ -181,3 +181,26 @@ CONFIG_PACKAGE_kmod-sit=m
 CONFIG_PACKAGE_kmod-nft-tproxy=m
 CONFIG_PACKAGE_kmod-ipt-ipset=m
 CONFIG_PACKAGE_kmod-nf-nathelper-extra=m
+
+# Extra kmod families for the ASU feed (=m: in the feed, not the image), built
+# with our vermagic so owut/apk can install them - stock kmods carry the wrong
+# vermagic and won't load. CONFIG_ALL_KMODS is deliberately avoided: on this
+# vendor kernel it drags in ~266 new symbols for hardware absent from the board.
+# --- iptables/netfilter conntrack extras (mwan3 and friends) ---
+CONFIG_PACKAGE_kmod-ipt-conntrack-extra=m
+CONFIG_PACKAGE_kmod-ipt-ipopt=m
+CONFIG_PACKAGE_kmod-ipt-extra=m
+CONFIG_PACKAGE_kmod-ipt-physdev=m
+CONFIG_PACKAGE_kmod-nf-conncount=m
+# --- USB host + mass storage (so users can mount a flash drive) ---
+CONFIG_PACKAGE_kmod-usb3=m
+CONFIG_PACKAGE_kmod-usb-storage=m
+CONFIG_PACKAGE_kmod-usb-storage-uas=m
+# --- removable-media filesystems + NLS codepages for vfat ---
+CONFIG_PACKAGE_kmod-fs-vfat=m
+CONFIG_PACKAGE_kmod-fs-exfat=m
+CONFIG_PACKAGE_kmod-fs-ntfs3=m
+CONFIG_PACKAGE_kmod-fs-ext4=m
+CONFIG_PACKAGE_kmod-nls-cp437=m
+CONFIG_PACKAGE_kmod-nls-iso8859-1=m
+CONFIG_PACKAGE_kmod-nls-utf8=m
