@@ -47,13 +47,16 @@ echo "=== publish-asu: $ASU_URL <- version $VER, revision $WANT ==="
 #     version of each package. When upstream point-updates a package mono ALSO builds
 #     (e.g. the ucode family r1 -> r2 on the rolling 25.12.5 feed), stock's r2 shadowed
 #     mono's r1 - but a device is pinned to the r1 it was flashed with, so asu's
-#     check_manifest 500'd with "libucode version not as requested: r1 vs r2". Making mono
-#     AUTHORITATIVE ends the drift for good: mono wins EVERY overlap (we simply never place
-#     stock's copy of a name mono builds), and for packages mono does NOT build we mirror
-#     the exact upstream apk into the mono feed and re-sign the index with mono's key
-#     (the IB already trusts both mono's and openwrt-25.12's keys, and re-verifies each
-#     apk, so mono-signing the index over mixed apks is safe). One origin, no live upstream
-#     at build time, no version race. It also gives routing/telephony/video a real
+#     check_manifest 500'd with "libucode version not as requested: r1 vs r2". The fix is
+#     SINGLE-ORIGIN + a version UNION: the IB reads only this mono groot feed, which carries
+#     mono's apks AND upstream's for every name whose versions differ, all re-signed with
+#     mono's key (the IB already trusts both mono's and openwrt-25.12's keys and re-verifies
+#     each apk, so mono-signing the index over mixed apks is safe). apk then picks the
+#     HIGHEST available: mono wins where it is ahead or distinct (ASK, kmods, mono-*, patched
+#     packages that bump their release); upstream wins where mono is merely behind (its build
+#     lags the rolling 25.12.5 feed) - so a device is neither shadowed into a phantom version
+#     (the libucode 500) nor downgraded off a newer package it already has. One origin, no
+#     live upstream at build time, no version race. It also gives routing/telephony/video a real
 #     packages.adb (they had none -> "wget error 8"), and folds the target userspace feed
 #     (iptables-mod-* etc.) in the same way. Fail-closed: refuse if upstream is unreachable.
 #     The mirror is a persistent, incremental cache (only new apks download); the assembled
@@ -117,17 +120,21 @@ def dl(url,dest):
 
 def build_feed(up_url, mono_dir, mirror_dir, out_dir):
     up=fetch_up(up_url)
-    mono=set(adb_names(os.path.join(mono_dir,"packages.adb")))
+    mono=adb_names(os.path.join(mono_dir,"packages.adb"))   # {name: version}, for version compare
     os.makedirs(mirror_dir,exist_ok=True)
     if os.path.isdir(out_dir): shutil.rmtree(out_dir)
     os.makedirs(out_dir,exist_ok=True)
-    # mono's own apks first - authoritative; mono wins every overlap because a name mono
-    # builds is excluded from the stock set below (its stock copy is never fetched/linked).
+    # Link mono's own apks first, then UNION in upstream's. We mirror the stock apk for any
+    # name mono does NOT build, AND for any name whose upstream version DIFFERS from mono's
+    # (mono's build can lag the rolling openwrt-25.12 feed). Both versions then sit in the
+    # feed and apk picks the HIGHEST: mono wins where it is ahead or distinct (ASK, kmods,
+    # mono-*, patched packages that bump their release), upstream wins where mono is merely
+    # behind - which stops us downgrading a device that already pulled the newer one. Not
+    # mono-wins-exclusive: that served mono's stale build and 38-downgraded a live device.
     if os.path.isdir(mono_dir):
         for fn in os.listdir(mono_dir):
             if fn.endswith(".apk"): link(os.path.join(mono_dir,fn), os.path.join(out_dir,fn))
-    # stock apks for names mono does NOT build: mirror (cache) then link in.
-    want=[(n,v) for n,v in up.items() if n not in mono]
+    want=[(n,v) for n,v in up.items() if n not in mono or mono[n]!=v]
     if LIMIT: want=want[:LIMIT]
     stock=0
     for n,v in want:
