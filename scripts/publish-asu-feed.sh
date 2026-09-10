@@ -118,26 +118,35 @@ def dl(url,dest):
         except OSError: pass
         print(f"  WARN download {url}: {e}", file=sys.stderr); return False
 
-def build_feed(up_url, mono_dir, mirror_dir, out_dir, do_union=True):
+def build_feed(up_url, mono_dir, mirror_dir, out_dir, gaps_only=False):
     up=fetch_up(up_url)
     mono=adb_names(os.path.join(mono_dir,"packages.adb"))   # {name: version}, for version compare
     os.makedirs(mirror_dir,exist_ok=True)
     if os.path.isdir(out_dir): shutil.rmtree(out_dir)
     os.makedirs(out_dir,exist_ok=True)
-    # Link mono's own apks first. Then, for a COMMUNITY feed (do_union), also mirror upstream's
-    # apk for any name mono does not build AND any name whose upstream version DIFFERS from
-    # mono's - both versions then sit in the feed and apk picks the highest, so upstream wins
-    # where mono merely lags the rolling openwrt-25.12 feed (no downgrading a device that
-    # already pulled the newer luci/adblock). For the BASE feed (do_union=False) we mirror only
-    # names mono does NOT build and NEVER a second version of a name mono builds: base/core
-    # packages are versioned by mono's own tree rev-count, INCOMPARABLE to upstream's
-    # (base-files "18" vs "1711"), and the profile pins mono's exact build - unioning
-    # upstream's higher number shadows it and 500s "base-files not as requested". So base =
-    # mono-authoritative; the community feeds union.
+    # Link mono's own apks first, then bring in upstream apks in one of two modes:
+    #
+    #  UNION (arch feeds): mirror upstream's apk for any name mono does not build AND any name
+    #  whose upstream version DIFFERS from mono's - both versions sit in the feed and apk picks
+    #  the highest, so upstream wins where mono merely lags the rolling openwrt-25.12 feed (no
+    #  downgrading a device that already pulled the newer luci/adblock/ppp/mbedtls).
+    #
+    #  GAPS-ONLY (target feed): mirror upstream ONLY for names mono does not build; NEVER shadow
+    #  a name mono builds. The target feed is the one that holds IB-force-baked, profile-pinned
+    #  packages - above all base-files, whose version is mono's whole-tree git rev-count ("18"),
+    #  INCOMPARABLE to upstream's ("1711") and NOT floated to the feed (the IB always bakes
+    #  mono's own). owut advertises the feed's highest and the IB bakes mono's -> a mirrored
+    #  upstream base-files 500s "version not as requested". The same trap arms for ANY future
+    #  force-baked package (and today needlessly mirrors an older upstream kernel apk). Never
+    #  floating target packages - which are frozen-core, byte-identical to upstream, and tied to
+    #  mono's exact build - closes the whole class structurally, not just base-files by name.
     if os.path.isdir(mono_dir):
         for fn in os.listdir(mono_dir):
             if fn.endswith(".apk"): link(os.path.join(mono_dir,fn), os.path.join(out_dir,fn))
-    want=[(n,v) for n,v in up.items() if n not in mono or (do_union and mono[n]!=v)]
+    if gaps_only:
+        want=[(n,v) for n,v in up.items() if n not in mono]
+    else:
+        want=[(n,v) for n,v in up.items() if n not in mono or mono[n]!=v]
     if LIMIT: want=want[:LIMIT]
     stock=0
     for n,v in want:
@@ -165,15 +174,18 @@ if union < 1000:
 
 tm=ts=ta=0
 for f in ARCHFEEDS:
-    # base = OpenWrt core, mono-versioned + profile-pinned -> mono-authoritative (no union);
-    # luci/packages/routing/telephony/video = community feeds with comparable versions -> union.
+    # ALL arch feeds union (comparable versions -> apk picks highest, no downgrade). These carry
+    # only feed-resolved packages: what owut advertises == what the IB installs, so they can
+    # never mismatch, and floating just tracks the rolling openwrt-25.12 branch.
     m,s,a=build_feed(f"{REL}/packages/{A}/{f}", f"{BIN}/packages/{A}/{f}",
-                     f"{MIRROR}/packages/{A}/{f}", f"{FEEDOUT}/packages/{A}/{f}",
-                     do_union=(f!="base"))
+                     f"{MIRROR}/packages/{A}/{f}", f"{FEEDOUT}/packages/{A}/{f}")
     print(f"  {f:9s}: mono={m} +stock={s} = {a}"); tm+=m; ts+=s; ta+=a
-# target userspace + kmods feed, same treatment (brings iptables-mod-* etc. under mono).
+# target userspace + kmods feed: GAPS-ONLY. This is where IB-force-baked packages live
+# (base-files, kernel), so mono ALWAYS wins here and upstream only fills names mono lacks
+# (iptables-mod-* etc.) - see build_feed. Never floating a name mono builds is what keeps the
+# base-files/kernel "not as requested" 500 from ever arming.
 m,s,a=build_feed(f"{REL}/targets/{T}/packages", f"{TDIR}/packages",
-                 f"{MIRROR}/targets/{T}/packages", f"{FEEDOUT}/targets/{T}/packages")
+                 f"{MIRROR}/targets/{T}/packages", f"{FEEDOUT}/targets/{T}/packages", gaps_only=True)
 print(f"  target   : mono={m} +stock={s} = {a}"); tm+=m; ts+=s; ta+=a
 print(f"  feed assembled: {tm} mono + {ts} stock = {ta} apks (mono-authoritative, mono-signed)")
 MERGE
