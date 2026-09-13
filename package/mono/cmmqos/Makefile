@@ -5,7 +5,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=cmmqos
 PKG_VERSION:=1
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_LICENSE:=GPL-2.0
 PKG_MAINTAINER:=Mono <tomaz@zaman.io>
@@ -24,8 +24,8 @@ endef
 define Package/cmmqos/description
   UCI front-end for the ASK cmm queue manager: CEETM egress shaping,
   DSCP->queue maps and ingress policing. Renders /etc/config/cmmqos into
-  cmm 'set qm' directives and applies them live via 'cmm -c qm-config'
-  (item 7) without restarting cmm, which would drop the fast path.
+  cmm 'set qm' directives and applies them without restarting cmm,
+  which would drop the fast path.
   Off by default (config cmmqos 'global' option enabled '0').
 endef
 
