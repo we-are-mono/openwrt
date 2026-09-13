@@ -1,5 +1,5 @@
 #!/bin/sh
-# Vendor the kernel-side ASK inputs for the OpenWrt-first build, as a matched set:
+# Vendor the ASK-sourced inputs for the OpenWrt-first build, as a matched set from ONE pin:
 #   1. the NXP DPAA/FMan/QBMan SDK driver source  -> target/linux/layerscape/files/
 #      plus the SDK-flavour DPAA device tree the board .dts transitively needs:
 #      the SoC base (fsl-ls1046a.dtsi, fsl-ls1046-post.dtsi, qoriq-{q,b}man-portals),
@@ -9,6 +9,11 @@
 #      cannot probe, so the whole DPAA dts base is vendored to shadow mainline's.
 #   2. ASK's kernel patch series (010-110)        -> target/linux/layerscape/patches-6.12/
 #   3. ASK's canonical board DTS (mono-gateway-dk.dts) -> files/.../freescale/
+#   4. ASK's downstream userspace patch COPIES (fmc/fmlib/libnfnetlink) -> package/*/patches/,
+#      relocking package/ask/ask-patch-sync.sha256 -- so a version bump moves these too and
+#      they can't silently drift (the old failure mode where a bump touched only the kernel
+#      track and the release later tripped on a stale fmc/fmlib copy). check-ask-patch-sync.sh
+#      stays the belt-and-braces guard.
 # OpenWrt's FILES_DIR overlay + normal patch flow then apply them onto OpenWrt's OWN
 # kernel -- no git-cloned vendor kernel, no custom Kernel/Prepare.
 #
@@ -40,7 +45,7 @@ MODE=sync
 # ASK is the single authoritative pin. The NXP SDK ref is READ from ASK's recipe
 # (NXP_SDK_SRCREV) below, never hand-maintained here.
 ASK_URL="https://github.com/we-are-mono/ASK.git"
-ASK_VERSION="5d96de360d8ec7809d8b97cee0ad591e48c5e73e"
+ASK_VERSION="71cf1527f60326d4cf83bb47dc6d8ba9e92c9b38"
 NXP_URL="https://github.com/nxp-qoriq/linux.git"
 ASK_SDK_PIN="pins/nxp-sdk-srcrev.inc"   # ASK's format-neutral NXP SDK SRCREV pin
 
@@ -56,6 +61,7 @@ FILES="target/linux/layerscape/files"
 PATCHES="target/linux/layerscape/patches-6.12"
 ASK_MANIFEST="$PATCHES/.ask-kernel-patches"   # provenance + list of synced ASK patches, for clean re-sync / check
 BOARD_DTS="arch/arm64/boot/dts/freescale/mono-gateway-dk.dts"   # ASK-owned canonical board DTS
+PATCH_SYNC="package/ask/ask-patch-sync.sha256" # lock manifest for the downstream userspace patch copies
 
 DRIFT=0
 
@@ -98,9 +104,11 @@ install_item() {  # src dest label
 KTMP="$(mktemp -d)"; ATMP="$(mktemp -d)"
 trap 'rm -rf "$KTMP" "$ATMP"' EXIT
 
-# ===== 1. Fetch ASK (single pin): patch series + board DTS + the kernel recipe =====
+# ===== 1. Fetch ASK (single pin): whole patch tree + board DTS + the kernel recipe =====
+# patches/ (not just patches/kernel) so the downstream fmc/fmlib/libnfnetlink masters
+# needed by section 5 come along in the same fetch.
 echo "sync-ask-kernel [$MODE]: fetching ASK @ $ASK_VERSION"
-sparse_fetch "$ASK_URL" "$ASK_VERSION" "$ATMP" patches/kernel dts pins
+sparse_fetch "$ASK_URL" "$ASK_VERSION" "$ATMP" patches dts pins
 
 # The single-pin source of truth: read the NXP SDK overlay ref from ASK's pin file.
 NXP_SDK_REF=$(sed -n 's/^NXP_SDK_SRCREV *= *"\([0-9a-fA-F]\{40\}\)".*/\1/p' "$ATMP/$ASK_SDK_PIN" | head -1)
@@ -196,9 +204,31 @@ fi
 # ===== 4. ASK canonical board DTS -> files/ (guarded via install_item's diff) =====
 install_item "$ATMP/dts/mono-gateway-dk.dts" "$FILES/$BOARD_DTS" "board DTS $BOARD_DTS"
 
+# ===== 5. ASK downstream userspace patch COPIES (fmc / fmlib / libnfnetlink) =====
+# fmc/fmlib are patched onto nxp-qoriq upstream and libnfnetlink onto stock OpenWrt, so ASK's
+# extensions reach those sources ONLY through these tracked COPIES. Sync them from the SAME ASK
+# pin so a version bump moves them in lockstep (the drift that used to surface only at release),
+# and relock $PATCH_SYNC. libnfnetlink's master is version-scoped by the package's PKG_VERSION.
+LNV=$(sed -n 's/^PKG_VERSION:=//p' package/libs/libnfnetlink/Makefile 2>/dev/null | head -1)
+# each entry: "<ASK master under $ATMP>|<downstream copy in this tree>"
+COPY_MAP="patches/fmc/01-mono-ask-extensions.patch|package/ask/fmc/patches/100-mono-ask-extensions.patch \
+patches/fmlib/01-mono-ask-extensions.patch|package/ask/fmlib/patches/100-mono-ask-extensions.patch \
+patches/libnfnetlink/${LNV}/01-nxp-ask-nonblocking-heap-buffer.patch|package/libs/libnfnetlink/patches/900-nxp-ask-nonblocking-heap-buffer.patch"
+for entry in $COPY_MAP; do
+	_master="$ATMP/${entry%%|*}"; _dest="${entry#*|}"
+	[ -f "$_master" ] || { echo "  MISSING ASK master: ${entry%%|*} (libnfnetlink tracks PKG_VERSION=$LNV)"; DRIFT=1; [ "$MODE" = check ] || exit 1; continue; }
+	install_item "$_master" "$_dest" "downstream ${_dest##*/}"
+done
+# In sync mode, relock the manifest (comment header preserved, shas in COPY_MAP order).
+if [ "$MODE" = sync ]; then
+	{ grep -E '^[[:space:]]*(#|$)' "$PATCH_SYNC"
+	  for entry in $COPY_MAP; do sha256sum "${entry#*|}"; done
+	} > "$PATCH_SYNC.tmp" && mv "$PATCH_SYNC.tmp" "$PATCH_SYNC"
+fi
+
 if [ "$MODE" = check ]; then
 	[ "$DRIFT" = 0 ] && echo "sync-ask-kernel: OK -- tree matches ASK@$ASK_VERSION + NXP@$NXP_SDK_REF" \
 		|| { echo "sync-ask-kernel: DRIFT detected -- run scripts/mono-sync-ask-kernel.sh to refresh" >&2; exit 1; }
 else
-	echo "sync-ask-kernel: done -- $(find "$FILES" -type f ! -name '.nxp-sdk-ref' | wc -l) SDK/DTS files + $(echo $fetched | wc -w) ASK kernel patches"
+	echo "sync-ask-kernel: done -- $(find "$FILES" -type f ! -name '.nxp-sdk-ref' | wc -l) SDK/DTS files + $(echo $fetched | wc -w) ASK kernel patches + fmc/fmlib/libnfnetlink downstream copies (relocked $PATCH_SYNC)"
 fi

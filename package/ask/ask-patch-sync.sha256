@@ -15,6 +15,6 @@
 # SAME commit (lockstep). scripts/check-ask-patch-sync.sh enforces this and
 # mono-update.sh gates every release on it.
 #   verify: grep -vE '^[[:space:]]*(#|$)' package/ask/ask-patch-sync.sha256 | sha256sum -c -
-9da0c6ecbc6c978d3cbae3c5faa83b00db7ac89903807044191a118e0e8ad63b  package/ask/fmc/patches/100-mono-ask-extensions.patch
-000a60bcf3e4293cdcc3d59dbd37ff06020d65bfae11e7bf454e3263bb3fe02c  package/ask/fmlib/patches/100-mono-ask-extensions.patch
+57490d8ff1765489e86de3ba42ca3816a24d8f9a1dbab76c0d58b9dcd4a548fd  package/ask/fmc/patches/100-mono-ask-extensions.patch
+a36820701b3a094601b4e409d96d102908dd0254d26118d4110afa759537fd39  package/ask/fmlib/patches/100-mono-ask-extensions.patch
 332386759d63e187d30c9da3d3723803fd10b278a1e38eb4f83223eb7fd5d7a9  package/libs/libnfnetlink/patches/900-nxp-ask-nonblocking-heap-buffer.patch
