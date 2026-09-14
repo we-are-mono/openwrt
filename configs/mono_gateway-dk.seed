@@ -162,11 +162,6 @@ CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=m
 CONFIG_PACKAGE_kmod-usb-serial-option=m
 CONFIG_PACKAGE_kmod-usb-acm=m
 
-# USB-drive filesystems (ext4/vfat/f2fs already builtin)
-CONFIG_PACKAGE_kmod-fs-exfat=m
-CONFIG_PACKAGE_kmod-fs-ntfs3=m
-CONFIG_PACKAGE_kmod-usb-storage-uas=m
-
 # Link aggregation + virtual net devices
 CONFIG_PACKAGE_kmod-bonding=m
 CONFIG_PACKAGE_kmod-dummy=m
@@ -192,15 +187,18 @@ CONFIG_PACKAGE_kmod-ipt-ipopt=m
 CONFIG_PACKAGE_kmod-ipt-extra=m
 CONFIG_PACKAGE_kmod-ipt-physdev=m
 CONFIG_PACKAGE_kmod-nf-conncount=m
-# --- USB host + mass storage (so users can mount a flash drive) ---
-CONFIG_PACKAGE_kmod-usb3=m
-CONFIG_PACKAGE_kmod-usb-storage=m
-CONFIG_PACKAGE_kmod-usb-storage-uas=m
-# --- removable-media filesystems + NLS codepages for vfat ---
-CONFIG_PACKAGE_kmod-fs-vfat=m
-CONFIG_PACKAGE_kmod-fs-exfat=m
-CONFIG_PACKAGE_kmod-fs-ntfs3=m
+# --- USB host + mass storage: BAKED (=y) so a USB drive mounts out of the box ---
+# kmod-usb3 (xhci-hcd) is REQUIRED: dwc3 is host-capable but xhci is =m and dwc3
+# declares no package-dep on it, so without this baked the controller has no HCD
+# driver and USB host enumerates nothing.
+CONFIG_PACKAGE_kmod-usb3=y
+CONFIG_PACKAGE_kmod-usb-storage=y
+CONFIG_PACKAGE_kmod-usb-storage-uas=y
+# --- removable-media filesystems + NLS codepages: BAKED (=y); btrfs/ext4 stay =m ---
+CONFIG_PACKAGE_kmod-fs-vfat=y
+CONFIG_PACKAGE_kmod-fs-exfat=y
+CONFIG_PACKAGE_kmod-fs-ntfs3=y
 CONFIG_PACKAGE_kmod-fs-ext4=m
-CONFIG_PACKAGE_kmod-nls-cp437=m
-CONFIG_PACKAGE_kmod-nls-iso8859-1=m
-CONFIG_PACKAGE_kmod-nls-utf8=m
+CONFIG_PACKAGE_kmod-nls-cp437=y
+CONFIG_PACKAGE_kmod-nls-iso8859-1=y
+CONFIG_PACKAGE_kmod-nls-utf8=y
