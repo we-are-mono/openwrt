@@ -1,7 +1,7 @@
 # ASK ↔ mainline kernel integration
 
 How the NXP **ASK** hardware-offload stack is brought into OpenWrt's **stock mainline
-kernel** (currently 6.12.103) for the Mono Gateway (NXP LS1046A, target
+kernel** (currently 6.12.112) for the Mono Gateway (NXP LS1046A, target
 `layerscape/armv8_64b`, profile `mono_gateway-dk`).
 
 This replaces the older model of git-cloning NXP's whole vendor kernel. The base is now
@@ -32,7 +32,7 @@ Everything is assembled reproducibly by one script from pinned upstream commits.
 Order matters — OpenWrt copies `files/` **before** applying patches (see
 `include/quilt.mk`), so patches land on the overlaid SDK.
 
-1. **Extract** stock mainline — `dl/linux-6.12.103.tar.xz` (the real kernel.org tarball).
+1. **Extract** stock mainline — `dl/linux-6.12.112.tar.xz` (the real kernel.org tarball).
 2. **Overlay** `target/linux/layerscape/files/` over the source (SDK drivers + DPAA dts).
 3. **Patch** `target/linux/layerscape/patches-6.12/*` in numeric order.
 4. **Build** with `target/linux/layerscape/armv8_64b/config-6.12` (SDK-not-mainline DPAA,
@@ -63,7 +63,7 @@ forward; NXP maintains it upstream, we copy.
 | **Structural** ⭐ | `patches-6.12/705-layerscape-wire-ask-sdk-drivers.patch` | **The keystone.** Adds `source`/`obj-` lines to the stock `freescale/{Kconfig,Makefile}` and `staging/{Kconfig,Makefile}` so kbuild descends into the overlaid SDK subdirs. Without it the vendored SDK is code the build never sees. |
 | **Build-config** | `armv8_64b/config-6.12` | Selects `FSL_SDK_DPA/BMAN/QMAN/FMAN/DPAA_ETH=y` and turns stock `FSL_DPAA/FSL_FMAN/FSL_DPAA_ETH=n` — builds the **SDK** datapath, not mainline's. Also carries the ASK offload symbols (see master switch). |
 | **Device-tree** | vendored `files/…/dts/freescale/*.dtsi` (16) + `patches-6.12/301-…build-mono-gateway-dk.patch` | The SDK drivers need **SDK-flavoured** DPAA/FMan bindings; the vendored `.dtsi` *shadow* mainline's same-named files (whose mainline bindings the SDK can't probe). `301` adds `dtb-y` for the board DTS. Vendoring the whole DPAA dts base is what fixed the FMan-port `-EIO` / `oh_port` NULL-deref. |
-| **Functional** ⭐ | `patches-6.12/010` + Bucket-B (`020` bridge, `030` v4/v6 fwd, `040` xfrm/IPsec, `050` conntrack, `060` qosmark, `070` ppp, `080` wext, `093` netlink, `097` xfrm dst) | `010` declares the master `CONFIG_CPE_FAST_PATH` in `net/Kconfig`; the rest splice `#ifdef CONFIG_CPE_FAST_PATH` hook-points into the stock **bridge / xfrm / netfilter / ppp** code that call the ASK offload engine. This is where ASK actually enters the network stack. |
+| **Functional** ⭐ | `patches-6.12/010` + Bucket-B (`020` bridge, `030` v4/v6 fwd, `040` xfrm/IPsec, `050` conntrack, `060` qosmark, `070` ppp, `080` wext, `093` netlink) | `010` declares the master `CONFIG_CPE_FAST_PATH` in `net/Kconfig`; the rest splice `#ifdef CONFIG_CPE_FAST_PATH` hook-points into the stock **bridge / xfrm / netfilter / ppp** code that call the ASK offload engine. This is where ASK actually enters the network stack. |
 | **Compat shims** | `patches-6.12/710–713` | Bridge stock↔SDK/ASK API gaps (things NXP's vendor kernel had that mainline lacks). See list below. |
 | **SDK fixes (Bucket-A)** | `patches-6.12/010, 090–101` | Patch the *vendored SDK itself*. Ride with `files/`, effectively kernel-version-invariant. |
 
@@ -111,7 +111,8 @@ toggle:
 **ASK — Bucket B (hooks into stock kernel subsystems, the per-kernel re-derivation surface):**
 `020` bridge · `030` ipv4/ipv6 forwarding · `040` xfrm/IPsec offload (heavyweight) ·
 `050` conntrack · `060` netfilter qosmark · `070` ppp · `080` wext ndo_do_ioctl restore ·
-`093` netlink L2FLOW cb-mutex · `097` xfrm trans-queue dst refcount.
+`093` netlink L2FLOW cb-mutex. (`097` xfrm trans-queue dst refcount was dropped at 6.12.112:
+stable's CVE-2026-98369 fix supersedes it.)
 
 **Mono glue (this integration):**
 `301` board `dtb-y` · `705` SDK kbuild wiring · `710` SDK build-compat (ioremap_cache_ns +

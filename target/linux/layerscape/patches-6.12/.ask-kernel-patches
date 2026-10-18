@@ -1,7 +1,5 @@
 # ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ 71cf1527f60326d4cf83bb47dc6d8ba9e92c9b38
 010-ask-fman-dpaa-ehash.patch
-020-ask-bridge-hooks.patch
-030-ask-ipv4-ipv6-forwarding.patch
 040-ask-xfrm-ipsec-offload.patch
 050-ask-conntrack-offload.patch
 060-ask-netfilter-qosmark.patch
@@ -12,7 +10,6 @@
 093-netlink-name-L2FLOW-cb-mutex.patch
 094-sdk-fman-dpaa-qbman-kasan-sanitize-off.patch
 096-sdk_fman-mac-hash-alloc-null-check.patch
-097-xfrm-trans-queue-force-dst-refcount.patch
 098-sdk_dpaa-bp-alloc-slab-build-skb.patch
 099-sdk_fman-ehash-flex-arrays.patch
 100-sdk_dpaa-ethtool-quiet-phyless-ports.patch

@@ -54,8 +54,13 @@ ASK_SDK_PIN="pins/nxp-sdk-srcrev.inc"   # ASK's format-neutral NXP SDK SRCREV pi
 # spin_unlock in ppp_connect_channel). ASK's verbatim 070 targets stock 6.12.103 (rwlock)
 # and won't apply here. The sync must NEITHER re-copy NOR clean these mono-owned versions;
 # they carry no ASK-verbatim drift guard (git tracks them). Re-derive on a kernel bump via
-# the quilt push-f/refresh loop. (020/040 still sync verbatim -- OpenWrt patches neither.)
-MONO_FWD=" 070-ask-ppp-hooks.patch "
+# the quilt push-f/refresh loop. (040 still syncs verbatim -- OpenWrt does not patch what it touches.)
+# 6.12.112 (upstream stable) moved context under two more hooks, so they are forward-ported
+# too: 020 (br_forward now takes READ_ONCE(dst->dst)) and 030 (ip6_output unlikely()/
+# skb_dst_dev() context). 097 is DROPPED, not ported: stable's CVE-2026-98369 fix does the same
+# skb_dst_force in xfrm_trans_queue_net (plus rcu_read_lock/dev_hold in xfrm_trans_reinject).
+# It stays listed only so a re-sync does not bring ASK's copy back.
+MONO_FWD=" 020-ask-bridge-hooks.patch 030-ask-ipv4-ipv6-forwarding.patch 070-ask-ppp-hooks.patch 097-xfrm-trans-queue-force-dst-refcount.patch "
 
 FILES="target/linux/layerscape/files"
 PATCHES="target/linux/layerscape/patches-6.12"
