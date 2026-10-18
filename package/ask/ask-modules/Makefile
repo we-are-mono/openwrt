@@ -3,7 +3,7 @@ include $(TOPDIR)/package/ask/ask-version.mk
 
 PKG_NAME:=ask-modules
 PKG_VERSION:=$(ASK_PKG_VERSION)
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=$(ASK_SOURCE_URL)
@@ -67,6 +67,7 @@ define Build/Prepare
 	xzcat $(DL_DIR)/$(ASK_SOURCE) | $(TAR) -C $(PKG_BUILD_DIR) --strip-components=1 -xf -
 	printf '/*Auto-generated file. Do not edit !*/\n#ifndef CDX_VERSION_H\n\n#define CDX_VERSION_H\n\n#define CDX_VERSION "ask-%.12s"\n\n#endif /* CDX_VERSION_H */\n' \
 		"$(ASK_VERSION)" > $(PKG_BUILD_DIR)/cdx/version.h
+	$(Build/Patch)
 endef
 
 ASK_KBUILD_ARGS:= \

@@ -1,0 +1,129 @@
+cdx: take the source MAC of plain Ethernet ports from net_dev->dev_addr
+
+Carries ASK commit 8f557ff1ae ("cdx: read a port's hardware address from
+its netdev", we-are-mono/ASK, 2026-09-18) for the pinned mono-1.0.7 source
+(ASK_VERSION in package/ask/ask-version.mk).
+
+Without it, cdx copies the port's permanent MAC (perm_addr) when the port
+registers, and uses that copy as the source MAC of hardware-forwarded
+frames. A port whose MAC was changed later sends the wrong source MAC
+(we-are-mono/openwrt issue 13).
+
+Only the two files that exist at mono-1.0.7 are carried: cdx/devman.c and
+cdx/portdefs.h. The upstream hunks for cdx/cdx_flowtable_hw.c and
+tools/host_tests/flowtable_hw.c are not carried; those files do not exist
+in mono-1.0.7. The hunks below are the same as upstream (the added and
+removed lines were compared).
+
+Not fixed here: flows that were programmed before a MAC change keep the old
+source MAC until they expire.
+
+Drop this patch when the repo moves to ASK mono-1.1.0. That release contains
+the fix, and this patch then fails to apply.
+
+diff --git a/cdx/devman.c b/cdx/devman.c
+index 55562f7d..77ad6e0d 100644
+--- a/cdx/devman.c
++++ b/cdx/devman.c
+@@ -304,10 +304,13 @@ static int get_eth_iface_info(struct dpa_iface_info *iface_info,
+ 	//os interface id
+ 	iface_info->osid = device->ifindex;
+ 	eth_info = &iface_info->eth_info;
+-	//save netdev
++	/* Save the netdev. It is the source of this port's hardware address
++	 * too, read where the header is encoded rather than copied here: the
++	 * only value that was ever available to copy is perm_addr, which by
++	 * definition does not follow `ip link set ... address`, and nothing
++	 * else ever refreshed it. The reference taken above is held for the
++	 * life of this record, so the read is always safe. */
+ 	eth_info->net_dev = device;
+-	//copy iface mac address 
+-	memcpy(eth_info->mac_addr, device->perm_addr, ETH_ALEN);
+ 	//copy speed, mtu and others
+ 	eth_info->speed = priv->mac_dev->max_speed;
+ 	eth_info->rx_channel_id = priv->channel;
+@@ -1105,10 +1108,15 @@ int dpa_get_out_tx_info_by_itf_id(PRouteEntry rt_entry ,
+ 						ETHER_ADDR_LEN);
+ 			if (!src_mac)
+ 			{
++				/* The bridge's address is the bridge's and is
++				 * supplied over FCI; a port's own is the
++				 * netdev's, read now rather than from a copy
++				 * taken at registration that never followed a
++				 * change. */
+ 				if (eth_info->is_bridged)
+ 					src_mac = eth_info->br_mac_addr;
+ 				else
+-					src_mac = eth_info->mac_addr;
++					src_mac = (unsigned char *)eth_info->net_dev->dev_addr;
+ 			}
+ 			if(dpa_get_fqid_from_eth(eth_info, &l2_info->fqid, NULL))
+ 				break;
+@@ -1396,10 +1404,12 @@ int dpa_get_tx_info_by_itf(PRouteEntry rt_entry, struct dpa_l2hdr_info *l2_info,
+ 
+ 			if (!src_mac)
+ 			{
++				/* As above: the netdev's current address, not
++				 * a registration-time copy of perm_addr. */
+ 				if (eth_info->is_bridged)
+ 					src_mac = eth_info->br_mac_addr;
+ 				else
+-					src_mac = eth_info->mac_addr;
++					src_mac = (unsigned char *)eth_info->net_dev->dev_addr;
+ 			}
+ 
+ 			if(dpa_get_fqid_from_eth(eth_info, &l2_info->fqid, qosinfo))
+@@ -1875,7 +1885,13 @@ void dpa_release_interface(uint32_t itf_id)
+ }
+ 
+ 
+-//get mac address by name
++/* Get a port's hardware address by interface name.
++ *
++ * Reads the netdev rather than any stored copy, for the reason
++ * get_eth_iface_info() gives: the only value ever stored was perm_addr, and
++ * nothing refreshed it. The record holds a reference to the device for its
++ * whole life, so the dereference is safe under the list lock.
++ */
+ int dpa_get_mac_addr(char *name, char *mac_addr)
+ {
+ 	struct dpa_iface_info *iface_info;
+@@ -1889,8 +1905,9 @@ int dpa_get_mac_addr(char *name, char *mac_addr)
+ 		if (iface_info->if_flags & IF_TYPE_ETHERNET) {
+ 			//match name
+ 			if (strcmp (name, iface_info->name) == 0) {
+-				memcpy(mac_addr, iface_info->eth_info.mac_addr,
+-						ETH_ALEN);
++				memcpy(mac_addr,
++				       iface_info->eth_info.net_dev->dev_addr,
++				       ETH_ALEN);
+ 				retval = 0;
+ 				break;
+ 			}
+@@ -1901,7 +1918,7 @@ int dpa_get_mac_addr(char *name, char *mac_addr)
+ 	return retval;
+ }
+ 
+-#ifdef DPA_IPSEC_OFFLOAD 
++#ifdef DPA_IPSEC_OFFLOAD
+ /*
+ * This function reconfiguring the discard mask by clearing the FM_FD_ERR_PRS_HDR_ERR
+ * and FM_FD_ERR_BLOCK_LIMIT_EXCEEDED error bit flags from FM_RFSDM_DEFAULT macro.
+diff --git a/cdx/portdefs.h b/cdx/portdefs.h
+index 573f208f..a9978792 100644
+--- a/cdx/portdefs.h
++++ b/cdx/portdefs.h
+@@ -77,7 +77,12 @@ struct eth_iface_info {
+ 	qman_cb_dqrr dqrr;
+ 	uint32_t num_pools;	//pools used by port
+ 	struct port_bman_pool_info pool_info[MAX_PORT_BMAN_POOLS]; //pool info
+-	uint8_t mac_addr[ETH_ALEN];	//mac address
++	/* No mac_addr here: a physical port's own address is net_dev's, read
++	 * where the Ethernet header is encoded. Every other interface type in
++	 * this family does carry one, because CMM invents those interfaces and
++	 * describes them over FCI -- there is no kernel object to ask. This is
++	 * the one arm that has a netdev, and so the one that should not cache
++	 * an address that goes stale the moment anyone changes it. */
+ 	uint8_t br_mac_addr[ETH_ALEN];	//bridge mac address
+ 	uint8_t is_bridged;		// flag to check if interface is bridged or not
+ 	uint32_t max_dist;		//max PCD distributions
