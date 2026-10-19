@@ -1,7 +1,7 @@
 # Single source of truth for the ASK revision used by all ASK packages.
 # Must match ASK_VERSION in scripts/mono-sync-ask-kernel.sh so the kernel
 # patches and the userspace/modules always come from the same commit.
-ASK_VERSION:=ae1d18226a1044449d83fab4fc7f1753f523d995
+ASK_VERSION:=6642f74750acf1d8ae410921d308538300926b15
 ASK_SOURCE:=ask-$(ASK_VERSION).tar.xz
 ASK_SOURCE_URL:=https://github.com/we-are-mono/ASK
 
