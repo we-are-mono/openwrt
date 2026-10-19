@@ -2,16 +2,17 @@
 # Must match ASK_VERSION in scripts/mono-sync-ask-kernel.sh so the kernel
 # patches and the userspace/modules always come from the same commit.
 ASK_VERSION:=6642f74750acf1d8ae410921d308538300926b15
+# The ASK release tag ASK_VERSION points at (mono-1.1.4 -> 1.1.4); bump both together.
+ASK_RELEASE:=1.1.4
 ASK_SOURCE:=ask-$(ASK_VERSION).tar.xz
 ASK_SOURCE_URL:=https://github.com/we-are-mono/ASK
 
-# APK-valid package version for ASK-sourced packages, DERIVED from ASK_VERSION
-# so it changes whenever the pinned commit does. apk requires a leading digit
-# (so the bare sha cannot be used) but accepts a ~<hash> commit suffix — the
-# same scheme the kernel package uses (e.g. 6.12.49~b9036c2b...). The old value
-# was a hand-typed date string decoupled from the commit: two different commits
-# could share one version, so an in-place `apk upgrade` would skip a new ASK and
-# `apk list` misreported which commit was installed. (sysupgrade was unaffected —
-# it reflashes the whole rootfs — but the version label lied.)
-ASK_PKG_VERSION:=1.0~$(shell echo $(ASK_VERSION) | cut -c1-12)
+# APK-valid package version for ASK-sourced packages: <release>~<commit>. apk
+# requires a leading digit (so the bare sha cannot be used) and accepts a ~<hash>
+# commit suffix, the same scheme the kernel package uses (6.12.49~b9036c2b...).
+# The release number is what orders two pins: owut and apk compare only the
+# numeric part and the -rN, so with a fixed "1.0~" prefix every bump compared as
+# equal and owut reported it as "indeterminate". The hash keeps two builds of
+# one release (e.g. a local file:// pin) distinguishable in `apk list`.
+ASK_PKG_VERSION:=$(ASK_RELEASE)~$(shell echo $(ASK_VERSION) | cut -c1-12)
 
