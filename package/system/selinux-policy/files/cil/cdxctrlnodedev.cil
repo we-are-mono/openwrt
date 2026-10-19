@@ -1,5 +1,7 @@
 ;; cdxctrlnodedev.cil — private label for /dev/cdx_ctrl
-;; char dev created by cdx.ko; devtmpfs auto-creates the node. Granted ONLY to cmm_t + dpaapp_t.
+;; char dev created by cdx.ko; devtmpfs auto-creates the node. No domain is granted it: its only
+;; userspace clients (cmm, dpa_app) retired with ASK's move to flowtable offload. The private
+;; label keeps the node out of tmp.fs.
 ;; Mirrors dev/nodedev/pppnodedev.cil verbatim.
 (block cdxctrl
 

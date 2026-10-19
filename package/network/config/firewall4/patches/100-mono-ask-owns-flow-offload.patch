@@ -1,0 +1,16 @@
+--- a/root/usr/share/ucode/fw4.uc
++++ b/root/usr/share/ucode/fw4.uc
+@@ -1969,8 +1969,11 @@
+ 			auto_helper: [ "bool", "1" ],
+ 			custom_chains: [ "bool", null, UNSUPPORTED ],
+ 			disable_ipv6: [ "bool", null, UNSUPPORTED ],
+-			flow_offloading: [ "bool", "0" ],
+-			flow_offloading_hw: [ "bool", "0" ],
++			// Mono Gateway: ASK's ask-flowtable service owns the hardware
++			// flowtable. A fw4 flowtable at priority 0 would claim every flow
++			// before ASK's chain sees it, so fw4 never declares one.
++			flow_offloading: [ "bool", null, UNSUPPORTED ],
++			flow_offloading_hw: [ "bool", null, UNSUPPORTED ],
+ 
+ 			auto_includes: [ "bool", "1" ]
+ 		});

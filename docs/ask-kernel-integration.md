@@ -60,14 +60,14 @@ forward; NXP maintains it upstream, we copy.
 | Layer | File(s) | What it glues |
 |---|---|---|
 | **Assembler** | `scripts/mono-sync-ask-kernel.sh` | Fetches the pristine NXP SDK + ASK patches from upstream and lays them into `files/` + `patches-6.12/`. `--check` diffs the tree vs the pins (drift guard). The whole integration is reproducible from this one script. |
-| **Structural** ⭐ | `patches-6.12/705-layerscape-wire-ask-sdk-drivers.patch` | **The keystone.** Adds `source`/`obj-` lines to the stock `freescale/{Kconfig,Makefile}` and `staging/{Kconfig,Makefile}` so kbuild descends into the overlaid SDK subdirs. Without it the vendored SDK is code the build never sees. |
+| **Structural** ⭐ | `patches-6.12/110-sdk-mainline-build-compat.patch` (ASK) | **The keystone.** Adds `source`/`obj-` lines to the stock `freescale/{Kconfig,Makefile}` and `staging/{Kconfig,Makefile}` so kbuild descends into the overlaid SDK subdirs. Without it the vendored SDK is code the build never sees. |
 | **Build-config** | `armv8_64b/config-6.12` | Selects `FSL_SDK_DPA/BMAN/QMAN/FMAN/DPAA_ETH=y` and turns stock `FSL_DPAA/FSL_FMAN/FSL_DPAA_ETH=n` — builds the **SDK** datapath, not mainline's. Also carries the ASK offload symbols (see master switch). |
 | **Device-tree** | vendored `files/…/dts/freescale/*.dtsi` (16) + `patches-6.12/301-…build-mono-gateway-dk.patch` | The SDK drivers need **SDK-flavoured** DPAA/FMan bindings; the vendored `.dtsi` *shadow* mainline's same-named files (whose mainline bindings the SDK can't probe). `301` adds `dtb-y` for the board DTS. Vendoring the whole DPAA dts base is what fixed the FMan-port `-EIO` / `oh_port` NULL-deref. |
-| **Functional** ⭐ | `patches-6.12/010` + Bucket-B (`020` bridge, `030` v4/v6 fwd, `040` xfrm/IPsec, `050` conntrack, `060` qosmark, `070` ppp, `080` wext, `093` netlink, `097` xfrm dst) | `010` declares the master `CONFIG_CPE_FAST_PATH` in `net/Kconfig`; the rest splice `#ifdef CONFIG_CPE_FAST_PATH` hook-points into the stock **bridge / xfrm / netfilter / ppp** code that call the ASK offload engine. This is where ASK actually enters the network stack. |
-| **Compat shims** | `patches-6.12/710–713` | Bridge stock↔SDK/ASK API gaps (things NXP's vendor kernel had that mainline lacks). See list below. |
+| **Functional** ⭐ | `patches-6.12/010` + Bucket-B (`030` v4/v6 fwd, `040` xfrm/IPsec, `070` ppp, `080` wext, `14x` netfilter flowtable, `150` hw qdisc, `16x` bridge multicast/forward-path, …) | `010` declares the master `CONFIG_CPE_FAST_PATH` in `net/Kconfig`; the rest extend the stock **netfilter flowtable / xfrm / ppp / bridge** code that the `ask_flowtable` adapter drives. This is where ASK actually enters the network stack. |
+| **Compat shims** | `patches-6.12/110` (ASK) | Bridge stock↔SDK/ASK API gaps (things NXP's vendor kernel had that mainline lacks); ASK carries them, so mono needs no shims of its own. |
 | **SDK fixes (Bucket-A)** | `patches-6.12/010, 090–101` | Patch the *vendored SDK itself*. Ride with `files/`, effectively kernel-version-invariant. |
 
-### The keystone, in full (`705`)
+### The keystone (now inside ASK's `110`)
 
 ```
 --- freescale/Kconfig
@@ -91,7 +91,6 @@ Declared by patch `010` in `net/Kconfig` (`depends on ARCH_LAYERSCAPE && NETFILT
 symbols depend on it:
 
 - `INET_IPSEC_OFFLOAD`, `INET6_IPSEC_OFFLOAD` — `depends on … && CPE_FAST_PATH`
-- `NETFILTER_XT_QOSMARK`, `NETFILTER_XT_QOSCONNMARK` — `depends on CPE_FAST_PATH`
 
 So flipping `CONFIG_CPE_FAST_PATH` in `config-6.12` is exactly the SDK-only ↔ full-ASK
 toggle:
@@ -105,19 +104,14 @@ toggle:
 
 ## Patch inventory (`patches-6.12/`)
 
-**ASK — Bucket A (SDK driver fixes, ride with `files/`):**
-`010` (fman/dpaa ehash — also declares CPE_FAST_PATH + straddles net/core), `090`–`101`.
-
-**ASK — Bucket B (hooks into stock kernel subsystems, the per-kernel re-derivation surface):**
-`020` bridge · `030` ipv4/ipv6 forwarding · `040` xfrm/IPsec offload (heavyweight) ·
-`050` conntrack · `060` netfilter qosmark · `070` ppp · `080` wext ndo_do_ioctl restore ·
-`093` netlink L2FLOW cb-mutex · `097` xfrm trans-queue dst refcount.
+**ASK:** every patch listed in `patches-6.12/.ask-kernel-patches` (the sync manifest — the
+authoritative list, rewritten by each sync). SDK driver fixes (`010`, `090`–`110`) ride with
+`files/`; the rest (`030`/`040`/`070`/`080`, `140`–`162`) hook the stock netfilter flowtable,
+xfrm, ppp and bridge code and are the per-kernel re-derivation surface.
 
 **Mono glue (this integration):**
-`301` board `dtb-y` · `705` SDK kbuild wiring · `710` SDK build-compat (ioremap_cache_ns +
-pgprot_cached_ns → plain cacheable, export `phylink_interface_max_speed`, restore
-`skb_recycle`) · `711` `sdk_dpaa` `__maybe_unused` · `712` swphy 10G fixed-link ·
-`713` export `rtmsg_ifinfo` for the ASK PPP hook.
+`301` board `dtb-y` · `070` is a mono forward-port of ASK's (re-anchored on OpenWrt's ppp
+backports; `MONO_FWD`, never overwritten by the sync).
 
 **Not ASK — stock layerscape platform patches (leave as-is):**
 `302`–`305`, `400`, `701`–`703`, `900` (LS1012A dts, PPFE, SPI-NOR, 2.5G SGMII…).
@@ -126,11 +120,15 @@ pgprot_cached_ns → plain cacheable, export `phylink_interface_max_speed`, rest
 
 ## The userspace boundary
 
-The kmods `cdx` / `fci` / `auto_bridge` and the `cmm` daemon are **not** in the kernel —
-they build out-of-tree as packages (`package/ask/…`) against the compiled kernel, and talk
-to the in-kernel hooks over the **FCI netlink ABI** and `/dev/cdx_ctrl`. They are pinned
+The kmods `cdx` / `ask_flowtable` (`package/ask/ask-modules`) and the `ask-flowtable` service
+(`package/ask/ask-flowtable`) are **not** in the kernel — they build out-of-tree against the
+compiled kernel. There is no ASK userspace control plane any more: the service declares an
+ordinary nftables flowtable (`table inet ask_flowtable`) and the adapter binds it, so the
+kernel ABI is Linux's own (`ndo_setup_tc` flowtable offload, `tc`, `devlink`). fw4 is patched
+to never declare a flowtable of its own (`firewall4/patches/100-mono-ask-owns-flow-offload`).
+QoS is plain `tc` (HTB offload, flower+police) and `devlink` policers. They are pinned
 separately (`package/ask/ask-version.mk`) but must come from the same ASK commit as the
-kernel patches (kmod vermagic + cmm↔cdx ABI move in lockstep).
+kernel patches (kmod vermagic + the hook ABI move in lockstep).
 
 ---
 

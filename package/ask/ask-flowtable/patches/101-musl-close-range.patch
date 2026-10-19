@@ -1,0 +1,20 @@
+--- a/flowtable/src/runtime.h
++++ b/flowtable/src/runtime.h
+@@ -7,6 +7,17 @@
+ #include <stdbool.h>
+ #include <stdint.h>
+ 
++#ifndef __GLIBC__
++/* musl has no close_range() wrapper; the syscall itself exists since Linux 5.9. */
++#include <sys/syscall.h>
++#include <unistd.h>
++static inline int ft_close_range(unsigned int first, unsigned int last, int flags)
++{
++	return (int)syscall(SYS_close_range, first, last, flags);
++}
++#define close_range ft_close_range
++#endif
++
+ #define FT_PROC        "/proc/cdx_flowtable"
+ #define FT_CDX_MODULE  "/sys/module/cdx"
+ #define FT_MULTICAST   "/sys/module/ask_flowtable/parameters/multicast"

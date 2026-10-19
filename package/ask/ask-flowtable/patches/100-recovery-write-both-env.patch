@@ -1,0 +1,18 @@
+--- a/flowtable/src/recovery.c
++++ b/flowtable/src/recovery.c
+@@ -69,10 +69,13 @@
+ static int write_record(const struct recovery *r)
+ {
+ 	/* One variable uses the common CLI of both libubootenv and U-Boot's
+-	 * tools; their batch-file formats differ. Never kill a flash write. */
++	 * tools; their batch-file formats differ. Never kill a flash write.
++	 * Mono Gateway: U-Boot reads the env from QSPI or eMMC depending on the
++	 * boot DIP switch, so the budget must land in both; mono-fw-setenv
++	 * writes both and fails unless both succeed. */
+ 	char record[180];
+ 	snprintf(record, sizeof(record), "%u %s %s", r->count, r->boot, r->reason);
+-	char *argv[] = {"fw_setenv", "ask_recovery", record, NULL};
++	char *argv[] = {"mono-fw-setenv", "ask_recovery", record, NULL};
+ 	extern char **environ;
+ 	pid_t child;
+ 	int status;

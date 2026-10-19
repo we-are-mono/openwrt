@@ -117,7 +117,7 @@ scripts/mono-update.sh
 
 Steps, in order:
 
-1. **Guards** — on `mono`, clean tree, `scripts/check-ask-patch-sync.sh` (ASK patch copies match their pins).
+1. **Guards** — on `mono`, clean tree, ASK pinned to a published commit + `scripts/mono-sync-ask-kernel.sh --check` (kernel copies match the pin).
 2. **Numbering** — `RN = git log -1 --format=%ct` (the release commit's committer epoch), guarded to exceed the last published N; `RELTAG = mono-vX.Y.Z-rN` (see §4).
 3. **Rebase** onto the newest upstream stable tag *within the current minor* (no-op if already current; a new minor/major is a deliberate manual retarget, never followed unattended).
 4. **Tag** `RELTAG` (dropped again by the EXIT trap on any later failure → next run recomputes the same rN).

@@ -263,6 +263,19 @@
     (call .rpc.data.dontaudit_readinherited_file_files (subj)))
 
 ;; ===========================================================================
+;; nft — keep ask-flowtable's transaction lease across exec
+;; ===========================================================================
+;; Denial: file runtmp.file { read write } for comm="nft"
+;; path="/tmp/run/ask-flowtable/policy.lock". Unlike the leaks above this fd is
+;; handed over on purpose: ask-flowtable dups its flock'd policy.lock into every
+;; nft it runs (flowtable/src/nft_process.c, the "lease") so the policy lock
+;; stays held while any nft is alive. Enforcing would close it at exec and drop
+;; that guarantee, so allow use of the inherited fd (no open).
+
+(in nft
+    (call .runtmp.readwriteinherited_file_files (subj)))
+
+;; ===========================================================================
 ;; htop — interactive process viewer: read generic /etc config + /sys class/bus
 ;; ===========================================================================
 ;; htop (shipped admin tool) reads a generic /etc config (conf.file, beyond its

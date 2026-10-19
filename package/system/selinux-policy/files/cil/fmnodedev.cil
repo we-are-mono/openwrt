@@ -4,10 +4,10 @@
 ;;   [include/uapi/linux/fmd/Peripherals/fm_ioctls.h:53-59; sdk_fman/.../lnxwrp_fm.c:1165-1168;
 ;;    lnxwrp_fm_port.c:1163-1203; LS1043 integration dpaa_integration_ext.h:192-203 =>
 ;;    FM_MAX_NUM_OF_MACS=8 (6x1G+2x10G) => rx/tx 0..7; FM_MAX_NUM_OF_OH_PORTS=6 => oh0..6]
-;; dpa_app opens all of these to program the FMan PCD for CDX hardware offload.
+;; No userspace opens these any more: cdx.ko builds the FMan PCD in-kernel (dpa_app retired).
 ;; Device-family node (mirrors dev/nodedev/usbnodedev.cil): enumerated devtmpfs name-transitions
-;; rather than a blanket tmp.fs chr_file grant to dpaapp — keeps every fm node in fm.nodedev, so the
-;; grant stays tight and no domain gets access to arbitrary unlabeled devtmpfs char nodes. LS1046A
+;; rather than a blanket tmp.fs chr_file label — keeps every fm node in fm.nodedev, so no domain
+;; gets access to arbitrary unlabeled devtmpfs char nodes. LS1046A
 ;; has a single FMan (fm0). Extra names for ports the board never probes are harmless no-ops.
 (block fm
 

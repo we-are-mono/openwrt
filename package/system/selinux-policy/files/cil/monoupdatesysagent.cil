@@ -36,7 +36,7 @@
   (call .exec.execute_file_files (subj))
 
   ;; Parse the signed manifest (jsonfilter) and read UCI (uci) in their own
-  ;; confined domains, the way rpc.server and cmm do — not execute_no_trans.
+  ;; confined domains, the way rpc.server does — not execute_no_trans.
   (call .jsonfilter.subj_type_transition (subj))
   (call .uci.subj_type_transition (subj))
 

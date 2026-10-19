@@ -472,12 +472,14 @@ define Device/mono_gateway-dk
   # ASU ImageBuilder installs only DEVICE_PACKAGES (+ target/global DEFAULT_PACKAGES)
   # and IGNORES the seed's CONFIG_PACKAGE_x=y, so a seed-only package is absent from
   # owut rebuilds.
-  # ASK hardware offload (CPE_FAST_PATH=y): the offload control stack (cmm/cdx/fci)
-  # rides on the fast-path kernel hooks. fmc (FMan config) is SDK-level and stays.
+  # ASK hardware offload: cdx + the flowtable adapter, driven by the ask-flowtable
+  # service (which also arms the ask-recovery watchdog budget before loading them).
+  # The kmod-sched-* trio lets tc program the hardware QoS ASK offloads (HTB, police,
+  # flower, devlink policers); kmod-ip6-tunnel lets the flowtable walk sit/ip6_tnl forwarding paths.
   # Wi-Fi (JODY-W3 / 88W9098): NXP moal/mlan cfg80211 FULLMAC driver + firmware,
   # wpad-openssl (VHT/HE), iw, and usteer band-steering.
-  DEVICE_PACKAGES := fmc \
-	kmod-ask-cdx kmod-ask-fci kmod-ask-auto-bridge cmm cmmqos dpa-app \
+  DEVICE_PACKAGES := ask-flowtable \
+	kmod-sched-core kmod-sched-flower kmod-sched-act-police kmod-ip6-tunnel tc-full devlink \
 	kmod-nxp-mwifiex nxp-wifi-firmware-9098-pcie wpad-openssl iw usteer luci-app-usteer \
 	kmod-leds-lp5812 kmod-sfp-led lm-sensors irqbalance \
 	kmod-i2c-core kmod-hwmon-core kmod-hwmon-ina2xx kmod-hwmon-lm90 \

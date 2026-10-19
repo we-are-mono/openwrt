@@ -1,0 +1,48 @@
+#!/bin/sh /etc/rc.common
+# ASK hardware flow offload. ASK's platform contract (integration/README.md):
+# nothing activates the hardware -- not even loading cdx -- until the recovery
+# watchdog is running and this boot's reboot budget is armed. A failed gate
+# leaves ASK unloaded and Linux forwarding in software.
+#
+# The daemon runs under its own supervisor, addressed through a protected
+# socket, so this script maps rc verbs onto its service-* commands rather than
+# handing it to procd.
+START=19
+STOP=88
+EXTRA_COMMANDS="status"
+EXTRA_HELP="	status	Show offload policy, ownership and backend state"
+
+DAEMON=/usr/sbin/ask-flowtable
+
+start() {
+	/etc/init.d/ask-recovery start || {
+		logger -t ask-flowtable 'recovery watchdog unavailable; ASK offload stays disabled'
+		return 1
+	}
+	"$DAEMON" recovery-arm || {
+		logger -t ask-flowtable 'reboot budget not armed; ASK offload stays disabled'
+		return 1
+	}
+	modprobe cdx && modprobe ask_flowtable || {
+		logger -t ask-flowtable 'failed to load the ASK modules'
+		return 1
+	}
+	"$DAEMON" service-start
+}
+
+stop() {
+	"$DAEMON" service-stop
+}
+
+restart() {
+	"$DAEMON" service-restart
+}
+
+reload() {
+	"$DAEMON" resume || return $?
+	"$DAEMON" service-start
+}
+
+status() {
+	"$DAEMON" status
+}

@@ -5,7 +5,9 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=firewall4
-PKG_RELEASE:=2
+# +100 over upstream's release: carries patches/100-mono-ask-owns-flow-offload, so
+# owut/apk must prefer this build over the stock feed's same-source firewall4.
+PKG_RELEASE:=102
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL=$(PROJECT_GIT)/project/firewall4.git

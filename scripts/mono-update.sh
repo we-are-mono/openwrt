@@ -44,11 +44,14 @@ esac
 	exit 1
 }
 
-# The downstream ASK patch copies (fmc/fmlib/libnfnetlink) must match their
-# pinned shas - and the ASK masters when a checkout is on disk - so a re-synced
-# but unpinned (or hand-edited) patch can never ship silently. Fail before we
-# tag or build. See scripts/check-ask-patch-sync.sh.
-scripts/check-ask-patch-sync.sh
+# ASK must be pinned to a published commit (never the local file:// repo), and the
+# committed kernel patches/SDK/DTS must match that pin, so a re-synced but unpinned
+# (or hand-edited) copy can never ship silently. Fail before we tag or build.
+if grep -q '^ASK_SOURCE_URL:=file://' package/ask/ask-version.mk; then
+	echo "mono-update: ASK is pinned to a local file:// repo, refusing" >&2
+	exit 1
+fi
+scripts/mono-sync-ask-kernel.sh --check
 
 git fetch --quiet origin 'refs/tags/v*:refs/tags/v*'
 
