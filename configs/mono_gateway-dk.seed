@@ -193,6 +193,7 @@ CONFIG_PACKAGE_kmod-ipt-ipopt=m
 CONFIG_PACKAGE_kmod-ipt-extra=m
 CONFIG_PACKAGE_kmod-ipt-physdev=m
 CONFIG_PACKAGE_kmod-nf-conncount=m
+CONFIG_PACKAGE_kmod-nf-conntrack-netlink=m
 # --- USB host + mass storage: BAKED (=y) so a USB drive mounts out of the box ---
 # kmod-usb3 (xhci-hcd) is REQUIRED: dwc3 is host-capable but xhci is =m and dwc3
 # declares no package-dep on it, so without this baked the controller has no HCD
