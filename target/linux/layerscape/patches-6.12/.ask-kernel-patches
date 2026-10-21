@@ -1,4 +1,4 @@
-# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ e2dae5ae9e0c6ab85ad4da10c7d091f5d6cc7915
+# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ 6b7e56ce54efe07ca08b2bc2cbb07f7817a9c6e3
 010-ask-fman-dpaa-ehash.patch
 030-ipv6-addrconf-modified-prefix-route-expiry.patch
 040-ask-xfrm-ipsec-offload.patch
@@ -29,7 +29,7 @@
 139-netfilter-nftables-commit-in-progress.patch
 140-ask-flowtable-context.patch
 141-ask-flowtable-teardown-attribution.patch
-142-ask-flowtable-teardown-handback-once.patch
+142-ask-flowtable-teardown-handback.patch
 143-ask-flowtable-tunnel-path.patch
 144-ask-flowtable-extend-ct-timeout.patch
 146-xfrm-packet-offload-mixed-family-child-route.patch
@@ -47,3 +47,4 @@
 172-br_netfilter-label-hooks-and-count-changes.patch
 173-netfilter-nft_flow_offload-skip-br_netfilter-frames.patch
 174-netfilter-flowtable-carry-transit-esp-and-ip-in-ip.patch
+175-netfilter-flowtable-conntrack-sees-carried-replies.patch

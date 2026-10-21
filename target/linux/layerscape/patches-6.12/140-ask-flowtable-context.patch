@@ -1,4 +1,4 @@
-From f7735b4d8b92be2e8560b6e78407f66c4d011e9a Mon Sep 17 00:00:00 2001
+From 4d8000ee423110c77a5751ca55943c4a40d14a96 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Tue, 22 Sep 2026 02:43:47 +0200
 Subject: [PATCH] netfilter: provide flowtable hardware lifecycle and policy
@@ -11,7 +11,9 @@ the ingress device, the MTU, the counter mode and a handle the flow
 shares with its driver: Linux or the driver can invalidate it, and the
 flowtable GC then retires that generation. IPv4 and IPv6 route changes
 are announced as netevents, and FLOWI_FLAG_NO_OIF_FALLBACK lets a
-table's reverse lookup respect a withdrawn or blackhole route.
+table's reverse lookup respect a withdrawn or blackhole route. A flow the
+table cached before its driver asked for handles has none, and is
+retired rather than offered, so that its next packet adds one that has.
 
 Each flow records the XFRM policy generation it was created under. While
 any policy or blocking default exists, a table whose driver uses handles
@@ -30,28 +32,44 @@ next packet offers a fresh one. A failed neighbour, or any other failure
 to build the rules, waits for the flow to expire -- 30 seconds for
 UDP -- as a refusal that would only recur.
 
+The handle holds the flow's conntrack, and every command names its
+direction, so a driver reports what a direction counted since its last
+report as it takes it out of the hardware, through
+nf_flow_offload_handle_account(): in answer to a deletion, after one it
+could not take at once, on a retirement of its own, or as its binding is
+released, when no deletion can reach it any more. The fold honours the
+counter mode the table had at its last command about the flow, and takes
+64-bit deltas, as a counter read's now does: a read every few seconds
+exceeds 32 bits on one flow above eight gigabits per second.
+
+A table freed once its devices are all unbound frees its flows in place:
+each driver retired its directions as its binding was released, and a
+deletion per hardware flow would only run past an empty callback list.
+
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- drivers/net/bonding/bond_main.c       |  80 +++++++++-----
- include/linux/netdevice.h             |   2 +
- include/net/flow.h                    |   2 +
- include/net/flow_offload.h            |  44 ++++++++
- include/net/netevent.h                |  32 ++++++
- include/net/netfilter/nf_flow_table.h |  60 +++++++++++
- include/net/netns/xfrm.h              |   2 +
- include/net/xfrm.h                    | 106 +++++++++++++++++--
- net/ipv4/fib_trie.c                   |  20 ++++
- net/ipv4/route.c                      |   3 +-
- net/ipv6/ip6_fib.c                    |  23 ++++
- net/netfilter/nf_flow_table_core.c    |  89 +++++++++++++++-
- net/netfilter/nf_flow_table_ip.c      |  25 ++++-
- net/netfilter/nf_flow_table_offload.c | 145 ++++++++++++++++++++++++--
- net/netfilter/nft_flow_offload.c      | 102 +++++++++++++++---
- net/xfrm/xfrm_device.c                |  29 ++++--
- net/xfrm/xfrm_policy.c                | 124 +++++++++++++++++++++-
- net/xfrm/xfrm_state.c                 |  25 ++++-
- net/xfrm/xfrm_user.c                  |   6 ++
- 19 files changed, 836 insertions(+), 83 deletions(-)
+ drivers/net/bonding/bond_main.c           |  80 +++++++----
+ include/linux/netdevice.h                 |   2 +
+ include/net/flow.h                        |   2 +
+ include/net/flow_offload.h                |  47 +++++++
+ include/net/netevent.h                    |  32 +++++
+ include/net/netfilter/nf_conntrack_acct.h |   3 +-
+ include/net/netfilter/nf_flow_table.h     |  81 +++++++++++
+ include/net/netns/xfrm.h                  |   2 +
+ include/net/xfrm.h                        | 106 ++++++++++++--
+ net/ipv4/fib_trie.c                       |  20 +++
+ net/ipv4/route.c                          |   3 +-
+ net/ipv6/ip6_fib.c                        |  23 +++
+ net/netfilter/nf_conntrack_core.c         |   3 +-
+ net/netfilter/nf_flow_table_core.c        | 156 ++++++++++++++++++++-
+ net/netfilter/nf_flow_table_ip.c          |  25 +++-
+ net/netfilter/nf_flow_table_offload.c     | 163 ++++++++++++++++++++--
+ net/netfilter/nft_flow_offload.c          | 102 +++++++++++---
+ net/xfrm/xfrm_device.c                    |  29 +++-
+ net/xfrm/xfrm_policy.c                    | 124 +++++++++++++++-
+ net/xfrm/xfrm_state.c                     |  25 +++-
+ net/xfrm/xfrm_user.c                      |   6 +
+ 21 files changed, 944 insertions(+), 90 deletions(-)
 
 diff --git a/drivers/net/bonding/bond_main.c b/drivers/net/bonding/bond_main.c
 index d10bbe4c3571..f910915934cb 100644
@@ -319,10 +337,10 @@ index 335bbc52171c..5e373dbaa397 100644
  	kuid_t  flowic_uid;
  	__u32		flowic_multipath_hash;
 diff --git a/include/net/flow_offload.h b/include/net/flow_offload.h
-index 292cd8f4b762..3851c360e54d 100644
+index 292cd8f4b762..cf62dca18c9e 100644
 --- a/include/net/flow_offload.h
 +++ b/include/net/flow_offload.h
-@@ -688,7 +688,51 @@ struct flow_cls_common_offload {
+@@ -688,7 +688,54 @@ struct flow_cls_common_offload {
  	struct netlink_ext_ack *extack;
  };
  
@@ -334,7 +352,9 @@ index 292cd8f4b762..3851c360e54d 100644
 + * direction's selected NEIGH destination; nf_dst_reverse is the other
 + * direction's destination;
 + * other transmit types provide NULL. nf_handle may be retained only through
-+ * nf_flow_offload_handle_get/put; it carries no flow/table/conntrack pointer.
++ * nf_flow_offload_handle_get/put; it carries no flow or table pointer, and
++ * the conntrack it holds is reached only through
++ * nf_flow_offload_handle_account().
 + * nf_xfrm_genid is the policy generation captured before route selection.
 + * Drivers must validate it before admission and after publishing their watch.
 + * It is the flow's creation generation on every later offer too, so once a
@@ -371,6 +391,7 @@ index 292cd8f4b762..3851c360e54d 100644
 +	int nf_ingress_ifindex;
 +	u16 nf_mtu;
 +	bool nf_counter;
++	u8 nf_dir;
  	struct flow_cls_common_offload common;
  	enum flow_cls_command command;
  	bool use_act_stats;
@@ -438,8 +459,22 @@ index 1be3757a8b7f..a98d45128798 100644
  };
  
  int register_netevent_notifier(struct notifier_block *nb);
+diff --git a/include/net/netfilter/nf_conntrack_acct.h b/include/net/netfilter/nf_conntrack_acct.h
+index a120685cac93..a6700a0cca06 100644
+--- a/include/net/netfilter/nf_conntrack_acct.h
++++ b/include/net/netfilter/nf_conntrack_acct.h
+@@ -65,8 +65,7 @@ static inline void nf_ct_set_acct(struct net *net, bool enable)
+ #endif
+ }
+ 
+-void nf_ct_acct_add(struct nf_conn *ct, u32 dir, unsigned int packets,
+-		    unsigned int bytes);
++void nf_ct_acct_add(struct nf_conn *ct, u32 dir, u64 packets, u64 bytes);
+ 
+ static inline void nf_ct_acct_update(struct nf_conn *ct, u32 dir,
+ 				     unsigned int bytes)
 diff --git a/include/net/netfilter/nf_flow_table.h b/include/net/netfilter/nf_flow_table.h
-index 1a6fca013165..bc7f2e12c936 100644
+index 1a6fca013165..58e8afb7a579 100644
 --- a/include/net/netfilter/nf_flow_table.h
 +++ b/include/net/netfilter/nf_flow_table.h
 @@ -84,6 +84,12 @@ struct nf_flowtable {
@@ -516,13 +551,17 @@ index 1a6fca013165..bc7f2e12c936 100644
  		enum flow_offload_xmit_type	xmit_type;
  	} tuple[FLOW_OFFLOAD_DIR_MAX];
  };
-@@ -221,6 +257,30 @@ struct nf_flow_route {
+@@ -221,6 +257,51 @@ struct nf_flow_route {
  struct flow_offload *flow_offload_alloc(struct nf_conn *ct);
  void flow_offload_free(struct flow_offload *flow);
  
 +/* A callback borrows a handle for one flow generation, shared by both
-+ * directions. get/put permit retention without pinning any flow, conntrack,
-+ * table, route or namespace. Invalidate is atomic-context safe and monotonic:
++ * directions. get/put permit retention without pinning any flow, table or
++ * route. A retained handle does hold the flow's conntrack, for
++ * nf_flow_offload_handle_account(): it counts against nf_conntrack_max, and
++ * its namespace's conntrack cleanup waits for it, so a driver puts the handle
++ * once its directions are out of the hardware and never keeps one beyond
++ * that. Invalidate is atomic-context safe and monotonic:
 + * lookup immediately declines this cached flow and native GC tears it down.
 + * The driver remains responsible for removing its hardware directions.
 + * Detaching the Linux flow also invalidates the handle; it cannot name a
@@ -543,6 +582,23 @@ index 1a6fca013165..bc7f2e12c936 100644
 +bool nf_flow_offload_handle_valid(const struct nf_flow_offload_handle *handle);
 +bool nf_flow_offload_handle_invalidate(struct nf_flow_offload_handle *handle);
 +void nf_flow_offload_handle_watch(struct nf_flow_offload_handle *handle);
++
++/* What a driver counted on one direction since it last reported, folded into
++ * the flow's conntrack as a counter read's reply is, if the table counted at
++ * Netfilter's last command about the flow. This is how a driver reports
++ * a direction's last delta as it takes the direction out of the hardware,
++ * whenever that is: in answer to a deletion, after one it could not answer at
++ * once, on its own retirement, or as its block is unbound and nothing can be
++ * asked of it any more. The handle holds the conntrack, so the count reaches
++ * it after the flow, the table and the driver's binding are gone; the
++ * conntrack's table entry still expires as before, only its memory waits for
++ * the handle. */
++void nf_flow_offload_handle_account(struct nf_flow_offload_handle *handle,
++				    enum flow_offload_tuple_dir dir,
++				    u64 packets, u64 bytes);
++/* Netfilter's own sampling of the counter mode; not for drivers. */
++void nf_flow_offload_handle_counting(struct nf_flow_offload_handle *handle,
++				     bool counter);
 +
  static inline int
  nf_flow_table_offload_add_cb(struct nf_flowtable *flow_table,
@@ -871,19 +927,35 @@ index 630b520f7241..c31cc86ea396 100644
  	fib6_info_release(rt);
  }
  
+diff --git a/net/netfilter/nf_conntrack_core.c b/net/netfilter/nf_conntrack_core.c
+index 77a445a59af3..8c28a6045e27 100644
+--- a/net/netfilter/nf_conntrack_core.c
++++ b/net/netfilter/nf_conntrack_core.c
+@@ -917,8 +917,7 @@ nf_conntrack_hash_check_insert(struct nf_conn *ct)
+ }
+ EXPORT_SYMBOL_GPL(nf_conntrack_hash_check_insert);
+ 
+-void nf_ct_acct_add(struct nf_conn *ct, u32 dir, unsigned int packets,
+-		    unsigned int bytes)
++void nf_ct_acct_add(struct nf_conn *ct, u32 dir, u64 packets, u64 bytes)
+ {
+ 	struct nf_conn_acct *acct;
+ 
 diff --git a/net/netfilter/nf_flow_table_core.c b/net/netfilter/nf_flow_table_core.c
-index b00f1c68a8e7..3e051b1c9260 100644
+index b00f1c68a8e7..9f5d6fdde83f 100644
 --- a/net/netfilter/nf_flow_table_core.c
 +++ b/net/netfilter/nf_flow_table_core.c
-@@ -9,6 +9,7 @@
+@@ -9,14 +9,116 @@
  #include <net/ip6_route.h>
  #include <net/netfilter/nf_tables.h>
  #include <net/netfilter/nf_flow_table.h>
 +#include <net/xfrm.h>
  #include <net/netfilter/nf_conntrack.h>
  #include <net/netfilter/nf_conntrack_core.h>
++#include <net/netfilter/nf_conntrack_acct.h>
  #include <net/netfilter/nf_conntrack_l4proto.h>
-@@ -17,6 +18,73 @@
+ #include <net/netfilter/nf_conntrack_tuple.h>
+ 
  static DEFINE_MUTEX(flowtable_lock);
  static LIST_HEAD(flowtables);
  
@@ -892,10 +964,17 @@ index b00f1c68a8e7..3e051b1c9260 100644
 +	atomic_t invalid;
 +	/* Set by nf_flow_offload_handle_watch(). */
 +	bool watched;
++	/* Whether the table counted at Netfilter's last command about the
++	 * flow, for nf_flow_offload_handle_account() once the table is gone. */
++	bool counter;
++	/* The flow's, held for as long as the handle is. */
++	struct nf_conn *ct;
 +	struct rcu_head rcu_head;
 +};
 +
-+static struct nf_flow_offload_handle *nf_flow_offload_handle_alloc(void)
++static struct nf_flow_offload_handle *
++nf_flow_offload_handle_alloc(const struct nf_flowtable *flow_table,
++			     struct nf_conn *ct)
 +{
 +	struct nf_flow_offload_handle *handle;
 +
@@ -903,6 +982,10 @@ index b00f1c68a8e7..3e051b1c9260 100644
 +	if (handle) {
 +		refcount_set(&handle->refs, 1);
 +		atomic_set(&handle->invalid, 0);
++		nf_flow_offload_handle_counting(handle,
++						READ_ONCE(flow_table->flags) & NF_FLOWTABLE_COUNTER);
++		nf_conntrack_get(&ct->ct_general);
++		handle->ct = ct;
 +	}
 +	return handle;
 +}
@@ -915,11 +998,33 @@ index b00f1c68a8e7..3e051b1c9260 100644
 +
 +void nf_flow_offload_handle_put(struct nf_flow_offload_handle *handle)
 +{
-+	/* Flowtable lookups borrow the handle under RCU, without a reference. */
-+	if (handle && refcount_dec_and_test(&handle->refs))
++	/* Flowtable lookups borrow the handle under RCU, without a reference,
++	 * and read only its state: the conntrack can go at once. */
++	if (handle && refcount_dec_and_test(&handle->refs)) {
++		nf_ct_put(handle->ct);
 +		kfree_rcu(handle, rcu_head);
++	}
 +}
 +EXPORT_SYMBOL_GPL(nf_flow_offload_handle_put);
++
++/* Sampled at the flow's creation and by every command Netfilter sends about
++ * it, so a table that starts or stops counting in place is followed from its
++ * next one. */
++void nf_flow_offload_handle_counting(struct nf_flow_offload_handle *handle,
++				     bool counter)
++{
++	if (handle)
++		WRITE_ONCE(handle->counter, counter);
++}
++
++void nf_flow_offload_handle_account(struct nf_flow_offload_handle *handle,
++				    enum flow_offload_tuple_dir dir,
++				    u64 packets, u64 bytes)
++{
++	if (handle && packets && READ_ONCE(handle->counter))
++		nf_ct_acct_add(handle->ct, dir, packets, bytes);
++}
++EXPORT_SYMBOL_GPL(nf_flow_offload_handle_account);
 +
 +bool nf_flow_offload_handle_valid(const struct nf_flow_offload_handle *handle)
 +{
@@ -957,7 +1062,7 @@ index b00f1c68a8e7..3e051b1c9260 100644
  static void
  flow_offload_fill_dir(struct flow_offload *flow,
  		      enum flow_offload_tuple_dir dir)
-@@ -119,6 +187,10 @@ static int flow_offload_fill_route(struct flow_offload *flow,
+@@ -119,6 +221,10 @@ static int flow_offload_fill_route(struct flow_offload *flow,
  		j++;
  	}
  	flow_tuple->encap_num = route->tuple[dir].in.num_encaps;
@@ -968,7 +1073,7 @@ index b00f1c68a8e7..3e051b1c9260 100644
  
  	switch (route->tuple[dir].xmit_type) {
  	case FLOW_OFFLOAD_XMIT_DIRECT:
-@@ -215,6 +287,8 @@ static void flow_offload_free_rcu(struct rcu_head *rcu_head)
+@@ -215,6 +321,8 @@ static void flow_offload_free_rcu(struct rcu_head *rcu_head)
  
  void flow_offload_free(struct flow_offload *flow)
  {
@@ -977,12 +1082,12 @@ index b00f1c68a8e7..3e051b1c9260 100644
  	switch (flow->type) {
  	case NF_FLOW_OFFLOAD_ROUTE:
  		flow_offload_route_release(flow);
-@@ -283,6 +357,15 @@ int flow_offload_add(struct nf_flowtable *flow_table, struct flow_offload *flow)
+@@ -283,6 +391,15 @@ int flow_offload_add(struct nf_flowtable *flow_table, struct flow_offload *flow)
  {
  	int err;
  
 +	if (READ_ONCE(flow_table->use_hw_handles) && !flow->hw_handle) {
-+		flow->hw_handle = nf_flow_offload_handle_alloc();
++		flow->hw_handle = nf_flow_offload_handle_alloc(flow_table, flow->ct);
 +		if (!flow->hw_handle)
 +			return -ENOMEM;
 +	}
@@ -993,7 +1098,7 @@ index b00f1c68a8e7..3e051b1c9260 100644
  	flow->timeout = nf_flowtable_time_stamp + flow_offload_get_timeout(flow);
  
  	err = rhashtable_insert_fast(&flow_table->rhashtable,
-@@ -371,7 +454,7 @@ flow_offload_lookup(struct nf_flowtable *flow_table,
+@@ -371,7 +488,7 @@ flow_offload_lookup(struct nf_flowtable *flow_table,
  
  	dir = tuplehash->tuple.dir;
  	flow = container_of(tuplehash, struct flow_offload, tuplehash[dir]);
@@ -1002,7 +1107,7 @@ index b00f1c68a8e7..3e051b1c9260 100644
  		return NULL;
  
  	if (unlikely(nf_ct_is_dying(flow->ct)))
-@@ -425,7 +508,7 @@ static bool nf_flow_custom_gc(struct nf_flowtable *flow_table,
+@@ -425,7 +542,7 @@ static bool nf_flow_custom_gc(struct nf_flowtable *flow_table,
  static void nf_flow_offload_gc_step(struct nf_flowtable *flow_table,
  				    struct flow_offload *flow, void *data)
  {
@@ -1011,7 +1116,7 @@ index b00f1c68a8e7..3e051b1c9260 100644
  	    nf_ct_is_dying(flow->ct) ||
  	    nf_flow_custom_gc(flow_table, flow))
  		flow_offload_teardown(flow);
-@@ -550,6 +633,8 @@ int nf_flow_table_init(struct nf_flowtable *flowtable)
+@@ -550,6 +667,8 @@ int nf_flow_table_init(struct nf_flowtable *flowtable)
  {
  	int err;
  
@@ -1020,6 +1125,55 @@ index b00f1c68a8e7..3e051b1c9260 100644
  	INIT_DELAYED_WORK(&flowtable->gc_work, nf_flow_offload_work_gc);
  	flow_block_init(&flowtable->flow_block);
  	init_rwsem(&flowtable->flow_block_lock);
+@@ -605,8 +724,22 @@ void nf_flow_table_cleanup(struct net_device *dev)
+ }
+ EXPORT_SYMBOL_GPL(nf_flow_table_cleanup);
+ 
++/* What a deletion that reaches no driver leaves of a hardware flow, done in
++ * place: the flow is torn down, its conntrack no longer marked as in the
++ * hardware, and freed. */
++static void nf_flow_table_free_flow(struct nf_flowtable *flow_table,
++				    struct flow_offload *flow, void *data)
++{
++	flow_offload_teardown(flow);
++	if (test_bit(NF_FLOW_HW, &flow->flags))
++		clear_bit(IPS_HW_OFFLOAD_BIT, &flow->ct->status);
++	flow_offload_del(flow_table, flow);
++}
++
+ void nf_flow_table_free(struct nf_flowtable *flow_table)
+ {
++	bool unbound;
++
+ 	mutex_lock(&flowtable_lock);
+ 	list_del(&flow_table->list);
+ 	mutex_unlock(&flowtable_lock);
+@@ -614,9 +747,22 @@ void nf_flow_table_free(struct nf_flowtable *flow_table)
+ 	cancel_delayed_work_sync(&flow_table->gc_work);
+ 	nf_flow_table_offload_flush(flow_table);
+ 	/* ... no more pending work after this stage ... */
+-	nf_flow_table_iterate(flow_table, nf_flow_table_do_cleanup, NULL);
+-	nf_flow_table_gc_run(flow_table);
+-	nf_flow_table_offload_flush_cleanup(flow_table);
++	/* A table whose devices are all unbound has no driver left to tell:
++	 * each driver retired its directions, and reported what they counted,
++	 * as its binding was released. A deletion per hardware flow would only
++	 * be queued, run past an empty callback list and waited for -- seconds
++	 * for a table of ten thousand flows, under the commit mutex of the
++	 * transaction that flushes this. Free the flows in place instead. */
++	down_read(&flow_table->flow_block_lock);
++	unbound = list_empty(&flow_table->flow_block.cb_list);
++	up_read(&flow_table->flow_block_lock);
++	if (unbound) {
++		nf_flow_table_iterate(flow_table, nf_flow_table_free_flow, NULL);
++	} else {
++		nf_flow_table_iterate(flow_table, nf_flow_table_do_cleanup, NULL);
++		nf_flow_table_gc_run(flow_table);
++		nf_flow_table_offload_flush_cleanup(flow_table);
++	}
+ 	rhashtable_destroy(&flow_table->rhashtable);
+ }
+ EXPORT_SYMBOL_GPL(nf_flow_table_free);
 diff --git a/net/netfilter/nf_flow_table_ip.c b/net/netfilter/nf_flow_table_ip.c
 index 98edcaa37b38..ff35d601699a 100644
 --- a/net/netfilter/nf_flow_table_ip.c
@@ -1100,7 +1254,7 @@ index 98edcaa37b38..ff35d601699a 100644
  	ret = nf_flow_offload_ipv6_forward(&ctx, flow_table, tuplehash, skb);
  	if (ret < 0)
 diff --git a/net/netfilter/nf_flow_table_offload.c b/net/netfilter/nf_flow_table_offload.c
-index 8e3edc7c37b3..8667bf9c5543 100644
+index 8e3edc7c37b3..2c406fb74ec6 100644
 --- a/net/netfilter/nf_flow_table_offload.c
 +++ b/net/netfilter/nf_flow_table_offload.c
 @@ -12,6 +12,7 @@
@@ -1279,7 +1433,7 @@ index 8e3edc7c37b3..8667bf9c5543 100644
  static int nf_flow_offload_tuple(struct nf_flowtable *flowtable,
  				 struct flow_offload *flow,
  				 struct nf_flow_rule *flow_rule,
-@@ -904,7 +993,23 @@ static int nf_flow_offload_tuple(struct nf_flowtable *flowtable,
+@@ -904,7 +993,24 @@ static int nf_flow_offload_tuple(struct nf_flowtable *flowtable,
  				 struct flow_stats *stats,
  				 struct list_head *block_cb_list)
  {
@@ -1300,11 +1454,33 @@ index 8e3edc7c37b3..8667bf9c5543 100644
 +		.nf_ingress_ifindex = nf_flow_offload_ingress(&flow->tuplehash[dir].tuple),
 +		.nf_mtu = flow->tuplehash[dir].tuple.mtu,
 +		.nf_counter = !!(READ_ONCE(flowtable->flags) & NF_FLOWTABLE_COUNTER),
++		.nf_dir = dir,
 +	};
  	struct netlink_ext_ack extack = {};
  	struct flow_block_cb *block_cb;
  	__be16 proto = ETH_P_ALL;
-@@ -1092,6 +1197,10 @@ nf_flow_offload_work_alloc(struct nf_flowtable *flowtable,
+@@ -914,6 +1020,9 @@ static int nf_flow_offload_tuple(struct nf_flowtable *flowtable,
+ 			     &flow->tuplehash[dir].tuple, &extack);
+ 	if (cmd == FLOW_CLS_REPLACE)
+ 		cls_flow.rule = flow_rule->rule;
++	/* The same sample the drivers see, taken before any of them can
++	 * retire a direction in its answer. */
++	nf_flow_offload_handle_counting(flow->hw_handle, cls_flow.nf_counter);
+ 
+ 	down_read(&flowtable->flow_block_lock);
+ 	list_for_each_entry(block_cb, block_cb_list, list) {
+@@ -987,6 +1096,10 @@ static void flow_offload_work_add(struct flow_offload_work *offload)
+ 	nf_flow_offload_destroy(flow_rule);
+ }
+ 
++/* A driver reports what a deleted direction counted since its last report
++ * through the flow's handle (nf_flow_offload_handle_account()), not in this
++ * reply: it may retire the direction later than this, and its binding may be
++ * gone before any deletion could reach it. */
+ static void flow_offload_work_del(struct flow_offload_work *offload)
+ {
+ 	clear_bit(IPS_HW_OFFLOAD_BIT, &offload->flow->ct->status);
+@@ -1092,6 +1205,10 @@ nf_flow_offload_work_alloc(struct nf_flowtable *flowtable,
  
  	offload = kmalloc(sizeof(struct flow_offload_work), GFP_ATOMIC);
  	if (!offload) {
@@ -1315,7 +1491,24 @@ index 8e3edc7c37b3..8667bf9c5543 100644
  		clear_bit(NF_FLOW_HW_PENDING, &flow->flags);
  		return NULL;
  	}
-@@ -1130,20 +1239,36 @@ void nf_flow_offload_del(struct nf_flowtable *flowtable,
+@@ -1110,6 +1227,16 @@ void nf_flow_offload_add(struct nf_flowtable *flowtable,
+ {
+ 	struct flow_offload_work *offload;
+ 
++	/* A flow the table cached before a driver asked it for handles has
++	 * none, and that driver can admit no offer without one: retire the
++	 * flow instead of offering it, so its next packet adds one that has a
++	 * handle rather than offering this one again every second until it
++	 * expires. */
++	if (!flow->hw_handle && READ_ONCE(flowtable->use_hw_handles)) {
++		flow_offload_teardown(flow);
++		return;
++	}
++
+ 	offload = nf_flow_offload_work_alloc(flowtable, flow, FLOW_CLS_REPLACE);
+ 	if (!offload)
+ 		return;
+@@ -1130,20 +1257,36 @@ void nf_flow_offload_del(struct nf_flowtable *flowtable,
  	flow_offload_queue_work(offload);
  }
  
