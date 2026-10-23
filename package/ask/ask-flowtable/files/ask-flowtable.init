@@ -13,6 +13,52 @@ EXTRA_COMMANDS="status"
 EXTRA_HELP="	status	Show offload policy, ownership and backend state"
 
 DAEMON=/usr/sbin/ask-flowtable
+MODCONF=/etc/modules.conf
+MANAGED='# ask-flowtable: route marks'
+ROUTE_MASK=/sys/module/ask_flowtable/parameters/route_mark_mask
+
+# <uci option> <default>: a hex mark mask, with or without its 0x.
+mark_bits() {
+	local v
+	v=$(uci -q get "$1")
+	v=${v:-$2}
+	echo $((0x${v#0[xX]}))
+}
+
+# mwan3 and pbr mark every connection to pick its route when it is created,
+# and nothing reads the mark after that. ask_flowtable offloads a marked
+# connection only inside route_mark_mask, read once at load from modprobe's
+# options, so name the bits of whichever is installed; with neither, every
+# marked connection stays in software. Prints nothing when the operator's own
+# "options ask_flowtable" line owns the module's options.
+route_marks() {
+	local mask=0
+
+	grep -vF "$MANAGED" "$MODCONF" 2>/dev/null |
+		grep -Eq '^[[:space:]]*options[[:space:]]+ask_flowtable([[:space:]]|$)' && return 0
+	[ -e /etc/config/mwan3 ] && mask=$((mask | $(mark_bits mwan3.globals.mmx_mask 0x3F00)))
+	[ -e /etc/config/pbr ] && mask=$((mask | $(mark_bits pbr.config.fw_mask 00ff0000)))
+	printf '%#x\n' "$mask"
+}
+
+# Keep one managed line naming those bits in /etc/modules.conf, which
+# modprobe reads. ask_flowtable is not unloaded at runtime (it holds references
+# once in use), so a change made while it is loaded applies from the next boot.
+sync_route_marks() {
+	local mask line rest
+
+	mask=$(route_marks)
+	line="options ask_flowtable route_mark_mask=$mask $MANAGED"
+	[ "${mask:-0}" = 0 ] && line=
+	if [ "$(grep -F "$MANAGED" "$MODCONF" 2>/dev/null)" != "$line" ]; then
+		# Rewrite in place: a new file (sed -i) would lose its SELinux label.
+		rest=$(grep -vF "$MANAGED" "$MODCONF" 2>/dev/null)
+		{ [ -z "$rest" ] || echo "$rest"; [ -z "$line" ] || echo "$line"; } > "$MODCONF"
+	fi
+	[ -n "$mask" ] && [ -r "$ROUTE_MASK" ] && [ "$(cat "$ROUTE_MASK")" -ne $((mask)) ] &&
+		logger -t ask-flowtable "route_mark_mask $mask applies from the next boot"
+	return 0
+}
 
 start() {
 	/etc/init.d/ask-recovery start || {
@@ -23,6 +69,7 @@ start() {
 		logger -t ask-flowtable 'reboot budget not armed; ASK offload stays disabled'
 		return 1
 	}
+	sync_route_marks
 	modprobe cdx && modprobe ask_flowtable || {
 		logger -t ask-flowtable 'failed to load the ASK modules'
 		return 1
@@ -34,7 +81,9 @@ stop() {
 	"$DAEMON" service-stop
 }
 
+# A restart after installing or reconfiguring mwan3 or pbr records its marks.
 restart() {
+	sync_route_marks
 	"$DAEMON" service-restart
 }
 

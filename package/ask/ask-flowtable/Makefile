@@ -3,7 +3,7 @@ include $(TOPDIR)/package/ask/ask-version.mk
 
 PKG_NAME:=ask-flowtable
 PKG_VERSION:=$(ASK_PKG_VERSION)
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=$(ASK_SOURCE_URL)
