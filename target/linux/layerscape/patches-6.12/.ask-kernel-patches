@@ -1,4 +1,4 @@
-# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ 7823f1f5cc0a472784ac1b7693afa79b91e39145
+# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ 849e1a9112e080980ebe83e7e9e2c547a60fd068
 010-ask-fman-dpaa-ehash.patch
 030-ipv6-addrconf-modified-prefix-route-expiry.patch
 040-ask-xfrm-ipsec-offload.patch
