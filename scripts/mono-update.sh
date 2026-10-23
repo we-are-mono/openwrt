@@ -141,7 +141,7 @@ trap on_exit EXIT
 # the exact resolved pins are recorded in $OUT/feeds.lock below. --freeze-feeds keeps
 # the existing pins for a hotfix that must carry only its own change.
 [ -n "$FREEZE_FEEDS" ] && export MONO_FREEZE_FEEDS=1
-scripts/mono-refresh-feed-pins.sh "openwrt-$SERIES"
+scripts/mono-refresh-feed-pins.sh "openwrt-${SERIES#v}"
 
 BINDIR=bin/targets/layerscape/armv8_64b
 
