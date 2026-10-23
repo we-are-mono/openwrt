@@ -474,12 +474,11 @@ define Device/mono_gateway-dk
   # owut rebuilds.
   # ASK hardware offload: cdx + the flowtable adapter, driven by the ask-flowtable
   # service (which also arms the ask-recovery watchdog budget before loading them).
-  # The kmod-sched-* trio lets tc program the hardware QoS ASK offloads (HTB, police,
-  # flower, devlink policers); kmod-ip6-tunnel lets the flowtable walk sit/ip6_tnl forwarding paths.
+  # ask-flowtable DEPENDS on the tc/devlink QoS tooling and kmod-ip6-tunnel (not listed
+  # here): as defaults, owut's diff_packages left them out of 1.0.x -> 1.1+ upgrades.
   # Wi-Fi (JODY-W3 / 88W9098): NXP moal/mlan cfg80211 FULLMAC driver + firmware,
   # wpad-openssl (VHT/HE), iw, and usteer band-steering.
   DEVICE_PACKAGES := ask-flowtable \
-	kmod-sched-core kmod-sched-flower kmod-sched-act-police kmod-ip6-tunnel tc-full devlink \
 	kmod-nxp-mwifiex nxp-wifi-firmware-9098-pcie wpad-openssl iw usteer luci-app-usteer \
 	kmod-leds-lp5812 kmod-sfp-led lm-sensors irqbalance \
 	kmod-i2c-core kmod-hwmon-core kmod-hwmon-ina2xx kmod-hwmon-lm90 \
