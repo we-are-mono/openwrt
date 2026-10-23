@@ -15,6 +15,6 @@
 +#define close_range ft_close_range
 +#endif
 +
- #define FT_PROC        "/proc/cdx_flowtable"
- #define FT_CDX_MODULE  "/sys/module/cdx"
- #define FT_MULTICAST   "/sys/module/ask_flowtable/parameters/multicast"
+ /* The adapter's levels and its counters (docs/flowtable/procfs.md). */
+ #define FT_STATUS      "/proc/ask_flowtable/status"
+ #define FT_STATS       "/proc/ask_flowtable/stats"
