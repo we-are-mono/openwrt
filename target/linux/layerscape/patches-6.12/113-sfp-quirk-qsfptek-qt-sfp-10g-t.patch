@@ -1,0 +1,14 @@
+--- a/drivers/net/phy/sfp.c
++++ b/drivers/net/phy/sfp.c
+@@ -552,6 +552,11 @@
+ 	SFP_QUIRK("HSGQ", "HSGQ-XPON-Stick", sfp_quirk_2500basex,
+ 		  sfp_fixup_ignore_tx_fault),
+ 
++	// QSFPTEK QT-SFP-10G-T is a 10GBASE-T module that identifies itself as
++	// "Intel Corp" and asserts TX_FAULT permanently (byte 110 reads 0x84 on
++	// an otherwise healthy module), so the host disables it on probe.
++	SFP_QUIRK_F("Intel Corp", "QT-SFP-10G-T", sfp_fixup_ignore_tx_fault),
++
+ 	// Lantech 8330-262D-E and 8330-265D can operate at 2500base-X, but
+ 	// incorrectly report 2500MBd NRZ in their EEPROM.
+ 	// Some 8330-265D modules have inverted LOS, while all of them report
