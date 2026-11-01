@@ -69,7 +69,8 @@ VER="$VER" ARCH="$ARCH" TARGET="$TARGET" BIN="$BIN" TDIR="$TDIR" \
   APK="$TOP/staging_dir/host/bin/apk" MKINDEX="$TOP/scripts/make-index-json.py" \
   KEY="$TOP/private-key.pem" MIRROR="$MIRROR" FEEDOUT="$FEEDOUT" \
   SELFTEST_LIMIT="${SELFTEST_LIMIT:-0}" python3 - <<'MERGE'
-import json, os, shutil, subprocess, sys, tempfile, urllib.request
+import json, os, shutil, socket, subprocess, sys, tempfile, urllib.request
+socket.setdefaulttimeout(120)   # a stalled CDN connection must fail, not hang the publish
 V=os.environ["VER"]; A=os.environ["ARCH"]; T=os.environ["TARGET"]
 BIN=os.environ["BIN"]; TDIR=os.environ["TDIR"]; APK=os.environ["APK"]; MKINDEX=os.environ["MKINDEX"]
 KEY=os.environ["KEY"]; MIRROR=os.environ["MIRROR"]; FEEDOUT=os.environ["FEEDOUT"]
@@ -111,12 +112,14 @@ def link(src,dst):
 
 def dl(url,dest):
     tmp=dest+".part"
-    try:
-        urllib.request.urlretrieve(url,tmp); os.replace(tmp,dest); return True
-    except Exception as e:
-        try: os.unlink(tmp)
-        except OSError: pass
-        print(f"  WARN download {url}: {e}", file=sys.stderr); return False
+    for attempt in range(3):
+        try:
+            urllib.request.urlretrieve(url,tmp); os.replace(tmp,dest); return True
+        except Exception as e:
+            try: os.unlink(tmp)
+            except OSError: pass
+            print(f"  WARN download {url} (attempt {attempt+1}/3): {e}", file=sys.stderr)
+    return False
 
 def build_feed(up_url, mono_dir, mirror_dir, out_dir, gaps_only=False):
     up=fetch_up(up_url)
