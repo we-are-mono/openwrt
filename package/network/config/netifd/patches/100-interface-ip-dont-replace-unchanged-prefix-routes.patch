@@ -1,0 +1,129 @@
+From 936ea5f13d32a36e1b8f8054826f13be917bf84d Mon Sep 17 00:00:00 2001
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Mon, 2 Nov 2026 02:56:18 +0100
+Subject: [PATCH] interface-ip: don't replace unchanged prefix routes on
+ refresh
+
+interface_update_prefix() calls interface_set_prefix_address() for every
+assignment whenever a delegated prefix's lifetimes are refreshed, which
+happens on every RA or DHCPv6 renew. The ip rules are only installed on
+the first enable, but the downlink route is re-added each time with
+NLM_F_REPLACE. The kernel swaps in a new fib6_info even when it is
+identical, sends RTM_NEWROUTE and bumps the fib6 serial, invalidating
+cached IPv6 routes, so every refresh looks like a route change to every
+listener (e.g. a flowtable retiring the flows under that prefix).
+
+Once the assignment is enabled, add the route with NLM_F_EXCL instead
+and treat EEXIST as success: an existing route is left untouched, while
+one the kernel dropped in the meantime (an IPv6 route flush on a link
+that netifd keeps up) is still restored on the next refresh. The first
+enable keeps the authoritative replace, and reloads that change the
+metric or table disable and re-enable the assignment, so they take it
+too.
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ interface-ip.c | 10 +++++++++-
+ system-dummy.c |  5 +++++
+ system-linux.c | 20 ++++++++++++++++----
+ system.h       |  1 +
+ 4 files changed, 31 insertions(+), 5 deletions(-)
+
+diff --git a/interface-ip.c b/interface-ip.c
+index 8866310..c0ad932 100644
+--- a/interface-ip.c
++++ b/interface-ip.c
+@@ -1052,7 +1052,15 @@ interface_set_prefix_address(struct device_prefix_assignment *assignment,
+ 		clear_if_addr(&route.addr, route.mask);
+ 		interface_set_route_info(iface, &route);
+ 
+-		system_add_route(l3_downlink, &route);
++		/*
++		 * A prefix lifetime refresh lands here with the assignment already
++		 * enabled. Replacing the unchanged route would notify every route
++		 * listener for nothing, so only restore it if it went missing.
++		 */
++		if (assignment->enabled)
++			system_ensure_route(l3_downlink, &route);
++		else
++			system_add_route(l3_downlink, &route);
+ 
+ 		if (uplink && uplink->l3_dev.dev && !(l3_downlink->settings.flags & DEV_OPT_MTU6)) {
+ 			int mtu = system_update_ipv6_mtu(uplink->l3_dev.dev, 0);
+diff --git a/system-dummy.c b/system-dummy.c
+index ea2f865..23abfe7 100644
+--- a/system-dummy.c
++++ b/system-dummy.c
+@@ -259,6 +259,11 @@ int system_add_route(struct device *dev, struct device_route *route)
+ 	return system_route_msg(dev, route, "add");
+ }
+ 
++int system_ensure_route(struct device *dev, struct device_route *route)
++{
++	return system_route_msg(dev, route, "ensure");
++}
++
+ int system_del_route(struct device *dev, struct device_route *route)
+ {
+ 	return system_route_msg(dev, route, "del");
+diff --git a/system-linux.c b/system-linux.c
+index 0160b30..36d574b 100644
+--- a/system-linux.c
++++ b/system-linux.c
+@@ -3350,7 +3350,7 @@ int system_del_neighbor(struct device *dev, struct device_neighbor *neighbor)
+ 	return system_neigh(dev, neighbor, RTM_DELNEIGH);
+ }
+ 
+-static int system_rt(struct device *dev, struct device_route *route, int cmd)
++static int system_rt(struct device *dev, struct device_route *route, int cmd, bool excl)
+ {
+ 	int alen = ((route->flags & DEVADDR_FAMILY) == DEVADDR_INET4) ? 4 : 16;
+ 	bool have_gw;
+@@ -3380,7 +3380,7 @@ static int system_rt(struct device *dev, struct device_route *route, int cmd)
+ 	struct nl_msg *msg;
+ 
+ 	if (cmd == RTM_NEWROUTE) {
+-		flags |= NLM_F_CREATE | NLM_F_REPLACE;
++		flags |= NLM_F_CREATE | (excl ? NLM_F_EXCL : NLM_F_REPLACE);
+ 
+ 		if (!dev) { /* Add null-route */
+ 			rtm.rtm_scope = RT_SCOPE_UNIVERSE;
+@@ -3462,12 +3462,24 @@ nla_put_failure:
+ 
+ int system_add_route(struct device *dev, struct device_route *route)
+ {
+-	return system_rt(dev, route, RTM_NEWROUTE);
++	return system_rt(dev, route, RTM_NEWROUTE, false);
++}
++
++/*
++ * Add the route only if it is missing. Unlike system_add_route(), an existing
++ * route is left alone: replacing an identical route still makes the kernel
++ * notify RTM_NEWROUTE and invalidate its cached routes.
++ */
++int system_ensure_route(struct device *dev, struct device_route *route)
++{
++	int ret = system_rt(dev, route, RTM_NEWROUTE, true);
++
++	return (ret == -NLE_EXIST) ? 0 : ret;
+ }
+ 
+ int system_del_route(struct device *dev, struct device_route *route)
+ {
+-	return system_rt(dev, route, RTM_DELROUTE);
++	return system_rt(dev, route, RTM_DELROUTE, false);
+ }
+ 
+ int system_flush_routes(void)
+diff --git a/system.h b/system.h
+index e8edfb7..4568761 100644
+--- a/system.h
++++ b/system.h
+@@ -292,6 +292,7 @@ int system_add_address(struct device *dev, struct device_addr *addr);
+ int system_del_address(struct device *dev, struct device_addr *addr);
+ 
+ int system_add_route(struct device *dev, struct device_route *route);
++int system_ensure_route(struct device *dev, struct device_route *route);
+ int system_del_route(struct device *dev, struct device_route *route);
+ int system_flush_routes(void);
+ 
