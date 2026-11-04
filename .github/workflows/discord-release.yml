@@ -60,7 +60,7 @@ jobs:
           body=$(printf '%s' "$rel_json" | jq -r '.body // ""')
 
           # Public download for the mono_gateway-dk sysupgrade image.
-          dl="https://openwrt.mono.si/${TAG}/layerscape-armv8_64b-mono_gateway-dk-ext4-sysupgrade.bin"
+          dl="https://openwrt.mono.si/${TAG}/layerscape-armv8_64b-mono_gateway-dk-squashfs-sysupgrade.bin"
 
           # Discord embed description cap is 4096 chars; keep well under.
           desc=$(printf '%s' "$body" | head -c 1500)
