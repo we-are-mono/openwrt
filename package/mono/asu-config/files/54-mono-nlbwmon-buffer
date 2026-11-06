@@ -1,0 +1,21 @@
+#!/bin/sh
+# Give nlbwmon a 4 MiB netlink receive buffer instead of its stock 512 KiB.
+#
+# nlbwmon reads conntrack events and its 30 s table dump over one socket; a
+# burst of connections during a dump overflows 512 KiB and the dump is lost
+# ("Unable to dump conntrack: No buffer space available"). 10-mono-netlink.conf
+# raises the kernel ceiling so the larger request is granted.
+#
+# Only the stock value (or none) is replaced, so an owner's own size stays.
+# Runs on every flashed image's first boot, so a box that kept its old
+# /etc/config/nlbwmon across sysupgrade is moved to the new size too.
+cfg=nlbwmon.@nlbwmon[0]
+uci -q get "$cfg" >/dev/null || exit 0
+case "$(uci -q get "$cfg.netlink_buffer_size")" in
+'' | 524288) ;;
+*) exit 0 ;;
+esac
+uci set "$cfg.netlink_buffer_size=4194304"
+uci commit nlbwmon
+logger -t mono-nlbwmon-buffer "nlbwmon netlink buffer -> 4 MiB"
+exit 0
