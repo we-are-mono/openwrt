@@ -1,0 +1,258 @@
+From: arkdev1 <138211005+arkdev1@users.noreply.github.com>
+Date: Fri, 24 Oct 2026 00:10:00 +0200
+Subject: [PATCH] sdk_dpaa: let the SFP cage drive the link state
+
+The Gateway DK's two 10G MACs are described with an "sfp" phandle and a
+fixed-link that is pinned up:
+
+	fm1_mac9: ethernet@f0000 {
+		sfp = <&sfp_xfi0>;
+		fixed-link = <0 1 10000 0 0>;
+	};
+
+Nothing consumes that phandle on the network side. This driver predates
+phylink and has no notion of a cage, so mac.c registers a fixed PHY whose
+state comes straight from the device tree, and phylib publishes a 10G
+carrier whether or not a module is fitted. With an empty cage the netdev
+reports "Link detected: yes" at 10000Mb/s, a bridge happily forwards to
+it, and every frame queued to the MAC is never confirmed -- around
+126 KiB/s of unreclaimable slab on a board receiving a segment's flooding,
+which is the leak reported in we-are-mono/openwrt#12.
+
+Measured on a DK: an empty cage and a cage holding a working 10GBASE-T
+module with a live link are indistinguishable, both carrier=1.
+
+Attach the MAC to the cage and let the module decide. mod-def0 and LOS are
+already described in the device tree and already handled by the sfp driver;
+all that is missing is the link between it and the netdev. The fixed PHY
+stays -- it is what configures the fixed rate -- but it gets a link_update
+hook, so phylib keeps running the state machine and only the value of the
+link changes. Ports wired to a PHY are untouched: sfp_bus_find_fwnode()
+returns NULL when there is no "sfp" phandle.
+
+Starting the cage also means tx-disable is finally driven: until now a
+module stayed at full power even with its interface down.
+
+Signed-off-by: arkdev1 <138211005+arkdev1@users.noreply.github.com>
+---
+--- a/drivers/net/ethernet/freescale/sdk_dpaa/mac.h
++++ b/drivers/net/ethernet/freescale/sdk_dpaa/mac.h
+@@ -69,6 +69,13 @@
+ 	/* List of multicast addresses */
+ 	struct list_head	 mc_addr_list;
+ 	struct fixed_phy_status	 *fixed_link;
++	/* Cage of a port whose DT node carries an "sfp" phandle. This driver
++	 * predates phylink, so what phylib publishes as the link state comes
++	 * from the fixed-link PHY; sfp_link lets the module drive that state
++	 * instead of the device tree pinning it up for good.
++	 */
++	struct sfp_bus		*sfp_bus;
++	bool			 sfp_link;
+ 
+ 	bool autoneg_pause;
+ 	bool rx_pause_req;
+--- a/drivers/net/ethernet/freescale/sdk_dpaa/mac.c
++++ b/drivers/net/ethernet/freescale/sdk_dpaa/mac.c
+@@ -50,12 +50,81 @@
+ #include <linux/device.h>
+ #include <linux/phy.h>
+ #include <linux/phylink.h>
++#include <linux/sfp.h>
+ #include <linux/io.h>
+ 
+ #include "lnxwrp_fm_ext.h"
+ 
+ #include "mac.h"
+ 
++/* A port with an "sfp" phandle gets attached to the cage below, so that
++ * module presence (mod-def0) and loss of signal (LOS) can drive the link
++ * state. Without an upstream the sfp state machine never reports those events
++ * to anyone, and a fixed-link PHY otherwise reports its device-tree link
++ * forever -- 10G up on an empty cage.
++ */
++static void mac_sfp_link_up(void *upstream)
++{
++	struct mac_device *mac_dev = upstream;
++
++	mac_dev->sfp_link = true;
++	if (mac_dev->phy_dev)
++		phy_trigger_machine(mac_dev->phy_dev);
++}
++
++static void mac_sfp_link_down(void *upstream)
++{
++	struct mac_device *mac_dev = upstream;
++
++	mac_dev->sfp_link = false;
++	if (mac_dev->phy_dev)
++		phy_trigger_machine(mac_dev->phy_dev);
++}
++
++static int mac_sfp_module_insert(void *upstream,
++				 const struct sfp_eeprom_id *id)
++{
++	/* The MACs that take a cage run at a single fixed rate, so there is
++	 * no configuration to derive from the module: accept it and let LOS
++	 * decide whether the link is up.
++	 */
++	return 0;
++}
++
++static void mac_sfp_module_remove(void *upstream)
++{
++	struct mac_device *mac_dev = upstream;
++
++	mac_dev->sfp_link = false;
++	if (mac_dev->phy_dev)
++		phy_trigger_machine(mac_dev->phy_dev);
++}
++
++/* attach() and detach() are not optional: sfp_register_bus() and
++ * sfp_unregister_bus() call them without checking for NULL, unlike
++ * link_down() and connect_phy(). There is nothing to keep here -- the bus is
++ * already in mac_dev -- but they have to exist.
++ */
++static void mac_sfp_attach(void *upstream, struct sfp_bus *bus)
++{
++}
++
++static void mac_sfp_detach(void *upstream, struct sfp_bus *bus)
++{
++	struct mac_device *mac_dev = upstream;
++
++	mac_dev->sfp_link = false;
++}
++
++static const struct sfp_upstream_ops mac_sfp_ops = {
++	.attach		= mac_sfp_attach,
++	.detach		= mac_sfp_detach,
++	.link_up	= mac_sfp_link_up,
++	.link_down	= mac_sfp_link_down,
++	.module_insert	= mac_sfp_module_insert,
++	.module_remove	= mac_sfp_module_remove,
++};
++
+ #define MEMAC_SUPPORTED \
+ 	(SUPPORTED_10baseT_Half \
+ 	| SUPPORTED_10baseT_Full \
+@@ -339,6 +408,32 @@
+ 		goto _return_dev_set_drvdata;
+ 	}
+ 
++	/* Attach to the SFP cage, if this port has one. sfp_bus_find_fwnode()
++	 * returns NULL when the node has no "sfp" phandle, which is the case
++	 * for every port wired to a PHY.
++	 */
++	{
++		struct sfp_bus *bus;
++
++		bus = sfp_bus_find_fwnode(of_fwnode_handle(mac_node));
++		if (IS_ERR(bus)) {
++			_errno = PTR_ERR(bus);
++			dev_err(dev, "sfp_bus_find_fwnode() = %d\n", _errno);
++			goto _return_dev_set_drvdata;
++		}
++		if (bus) {
++			_errno = sfp_bus_add_upstream(bus, mac_dev,
++						      &mac_sfp_ops);
++			if (_errno) {
++				sfp_bus_put(bus);
++				dev_err(dev, "sfp_bus_add_upstream() = %d\n",
++					_errno);
++				goto _return_dev_set_drvdata;
++			}
++			mac_dev->sfp_bus = bus;
++		}
++	}
++
+ 	/* pause frame autonegotiation enabled*/
+ 	mac_dev->autoneg_pause = true;
+ 
+@@ -375,6 +470,9 @@
+ 	dev = &of_dev->dev;
+ 	mac_dev = (struct mac_device *)dev_get_drvdata(dev);
+ 
++	if (mac_dev->sfp_bus)
++		sfp_bus_del_upstream(mac_dev->sfp_bus);
++
+ 	for_each_port_device(i, mac_dev->port_dev)
+ 		fm_port_unbind(mac_dev->port_dev[i]);
+ 
+--- a/drivers/net/ethernet/freescale/sdk_dpaa/mac-api.c
++++ b/drivers/net/ethernet/freescale/sdk_dpaa/mac-api.c
+@@ -44,6 +44,8 @@
+ #include <linux/of_platform.h>
+ #include <linux/of_mdio.h>
+ #include <linux/phy.h>
++#include <linux/phy_fixed.h>
++#include <linux/sfp.h>
+ #include <linux/netdevice.h>
+ 
+ #include "dpaa_eth.h"
+@@ -361,6 +363,21 @@
+ 		netdev_err(net_dev, "set_mac_active_pause() = %d\n", _errno);
+ }
+ 
++/* Link state of a port that has an SFP cage. Installed on the fixed-link
++ * PHY, so phylib keeps publishing the link -- it just stops being the value
++ * the device tree pinned, and becomes what the cage reports.
++ */
++static int memac_sfp_link_update(struct net_device *net_dev,
++				 struct fixed_phy_status *status)
++{
++	struct dpa_priv_s *priv = netdev_priv(net_dev);
++	struct mac_device *mac_dev = priv->mac_dev;
++
++	status->link = mac_dev->sfp_link;
++
++	return 0;
++}
++
+ /* Initializes driver's PHY state, and attaches to the PHY.
+  * Returns 0 on success.
+  */
+@@ -439,6 +456,24 @@
+ 
+ 	mac_dev->phy_dev = phy_dev;
+ 
++	/* With a cage attached, hand the fixed-link PHY a link_update hook so
++	 * the carrier follows the module instead of the device tree, and start
++	 * the cage so its state machine reports link events to us -- and so
++	 * that tx-disable is asserted again when the interface goes down.
++	 * Report the link down until the cage says otherwise.
++	 */
++	if (mac_dev->sfp_bus) {
++		int err = fixed_phy_set_link_update(phy_dev,
++						    memac_sfp_link_update);
++
++		if (err)
++			netdev_warn(net_dev,
++				    "fixed_phy_set_link_update() = %d; link state stays pinned by the DT\n",
++				    err);
++		netif_carrier_off(net_dev);
++		sfp_upstream_start(mac_dev->sfp_bus);
++	}
++
+ 	return 0;
+ }
+ 
+--- a/drivers/net/ethernet/freescale/sdk_dpaa/dpaa_eth_common.c
++++ b/drivers/net/ethernet/freescale/sdk_dpaa/dpaa_eth_common.c
+@@ -32,6 +32,7 @@
+ #include <linux/init.h>
+ #include <linux/module.h>
+ #include <linux/of_platform.h>
++#include <linux/sfp.h>
+ #include <linux/of_net.h>
+ #include <linux/platform_device.h>
+ #include <linux/etherdevice.h>
+@@ -211,6 +212,9 @@
+ 		_errno = err ? err : _errno;
+ 	}
+ 
++	if (mac_dev->sfp_bus)
++		sfp_upstream_stop(mac_dev->sfp_bus);
++
+ 	if (mac_dev->phy_dev)
+ 		phy_disconnect(mac_dev->phy_dev);
+ 	mac_dev->phy_dev = NULL;
