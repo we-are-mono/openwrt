@@ -1,4 +1,4 @@
-# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ f00d4e18f1ee6ad1fcc932cc0e54ba4074dbc4e2
+# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ d8f5f634e54f6e41bfc9f0abcf75af0a83b33936
 010-ask-fman-dpaa-ehash.patch
 030-ipv6-addrconf-modified-prefix-route-expiry.patch
 040-ask-xfrm-ipsec-offload.patch
@@ -48,3 +48,5 @@
 173-netfilter-nft_flow_offload-skip-br_netfilter-frames.patch
 174-netfilter-flowtable-carry-transit-esp-and-ip-in-ip.patch
 175-netfilter-flowtable-conntrack-sees-carried-replies.patch
+180-wireguard-fastpath.patch
+184-sdk_dpaa-rx-checksum-feature.patch
