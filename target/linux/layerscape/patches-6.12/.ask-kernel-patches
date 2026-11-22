@@ -1,6 +1,5 @@
-# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ d8f5f634e54f6e41bfc9f0abcf75af0a83b33936
+# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ 3a081ac72bfa43322df0c3da5a49c6a80160a434
 010-ask-fman-dpaa-ehash.patch
-030-ipv6-addrconf-modified-prefix-route-expiry.patch
 040-ask-xfrm-ipsec-offload.patch
 080-wext-core-restore-ndo_do_ioctl.patch
 090-qbman-dpa_alloc-preallocate-nodes.patch
@@ -50,3 +49,6 @@
 175-netfilter-flowtable-conntrack-sees-carried-replies.patch
 180-wireguard-fastpath.patch
 184-sdk_dpaa-rx-checksum-feature.patch
+186-netfilter-flowtable-walk-latency.patch
+188-qbman-cgr-lock-raw-spinlock.patch
+189-sdk_dpaa-rx-pool-recovery.patch
