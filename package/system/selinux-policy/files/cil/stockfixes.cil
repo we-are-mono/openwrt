@@ -563,3 +563,14 @@
 (in media
     (filecon "/data" dir file_context)
     (filecon "/data/.*" any ()))
+
+;; ===========================================================================
+;; e2fsprogs (mkfs.ext4) — search the uci-defaults dir it is started from
+;; ===========================================================================
+;; Denial: dir uci.defaults.file { search } for comm="mkfs.ext4" name="uci-defaults".
+;; On the first boot after a full-eMMC flash, 11-mono-gateway-data formats the
+;; fresh p5 as /data. The uci-defaults runner executes scripts from inside
+;; /etc/uci-defaults, so mkfs.ext4 (transitioned to e2fsprogs.subj) inherits that
+;; cwd and resolves paths relative to it. Grant search on that one dir type only.
+(in e2fsprogs
+    (call .uci.defaults.search_file_dirs (subj)))
