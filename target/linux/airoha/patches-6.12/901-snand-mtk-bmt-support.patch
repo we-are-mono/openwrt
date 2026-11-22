@@ -1,3 +1,13 @@
+From 68d5efaa10cf0689521fe05e386e3a1e11d8cb29 Mon Sep 17 00:00:00 2001
+From: Chuanhong Guo <gch981213@gmail.com>
+Date: Thu, 7 Apr 2022 10:16:47 +0800
+Subject: [PATCH] mtd: spinand: attach mtk_bmt
+
+Call mtk_bmt_attach() when a SPI-NAND device is registered and
+mtk_bmt_detach() when it is removed or the registration fails, so that
+the bad block remapping of the bootloader (mtk_bmt) is used for SPI-NAND
+flash as well.
+---
 --- a/drivers/mtd/nand/spi/core.c
 +++ b/drivers/mtd/nand/spi/core.c
 @@ -19,6 +19,7 @@
@@ -8,7 +18,7 @@
  
  static int spinand_read_reg_op(struct spinand_device *spinand, u8 reg, u8 *val)
  {
-@@ -1586,6 +1587,7 @@ static int spinand_probe(struct spi_mem
+@@ -1609,6 +1610,7 @@ static int spinand_probe(struct spi_mem
  	if (ret)
  		return ret;
  
@@ -16,7 +26,7 @@
  	ret = mtd_device_register(mtd, NULL, 0);
  	if (ret)
  		goto err_spinand_cleanup;
-@@ -1593,6 +1595,7 @@ static int spinand_probe(struct spi_mem
+@@ -1616,6 +1618,7 @@ static int spinand_probe(struct spi_mem
  	return 0;
  
  err_spinand_cleanup:
@@ -24,7 +34,7 @@
  	spinand_cleanup(spinand);
  
  	return ret;
-@@ -1611,6 +1614,7 @@ static int spinand_remove(struct spi_mem
+@@ -1634,6 +1637,7 @@ static int spinand_remove(struct spi_mem
  	if (ret)
  		return ret;
  

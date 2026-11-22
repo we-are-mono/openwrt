@@ -1,3 +1,4 @@
+From fdbb468c5998d9adb1819751ffaf38013768a8eb Mon Sep 17 00:00:00 2001
 From: Felix Fietkau <nbd@nbd.name>
 Date: Mon, 21 Mar 2022 20:39:59 +0100
 Subject: [PATCH] net: ethernet: mtk_eth_soc: enable threaded NAPI
@@ -10,7 +11,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
 
 --- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
 +++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
-@@ -5217,6 +5217,8 @@ static int mtk_probe(struct platform_dev
+@@ -5207,6 +5207,8 @@ static int mtk_probe(struct platform_dev
  		dev_err(eth->dev, "failed to allocated dummy device\n");
  		goto err_unreg_netdev;
  	}

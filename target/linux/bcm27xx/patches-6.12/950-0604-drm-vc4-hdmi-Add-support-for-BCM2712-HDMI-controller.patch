@@ -21,7 +21,7 @@ Signed-off-by: Dave Stevenson <dave.stevenson@raspberrypi.com>
 
 --- a/drivers/gpu/drm/vc4/vc4_hdmi.c
 +++ b/drivers/gpu/drm/vc4/vc4_hdmi.c
-@@ -845,6 +845,7 @@ static void vc4_hdmi_encoder_post_crtc_d
+@@ -844,6 +844,7 @@ static void vc4_hdmi_encoder_post_crtc_d
  {
  	struct vc4_hdmi *vc4_hdmi = encoder_to_vc4_hdmi(encoder);
  	struct drm_device *drm = vc4_hdmi->connector.dev;
@@ -29,7 +29,7 @@ Signed-off-by: Dave Stevenson <dave.stevenson@raspberrypi.com>
  	unsigned long flags;
  	int idx;
  
-@@ -861,14 +862,25 @@ static void vc4_hdmi_encoder_post_crtc_d
+@@ -860,14 +861,25 @@ static void vc4_hdmi_encoder_post_crtc_d
  
  	HDMI_WRITE(HDMI_VID_CTL, HDMI_READ(HDMI_VID_CTL) | VC4_HD_VID_CTL_CLRRGB);
  
@@ -57,9 +57,9 @@ Signed-off-by: Dave Stevenson <dave.stevenson@raspberrypi.com>
 +		spin_unlock_irqrestore(&vc4_hdmi->hw_lock, flags);
 +	}
  
- 	vc4_hdmi_disable_scrambling(encoder);
+ 	drm_dev_exit(idx);
  
-@@ -1488,7 +1500,6 @@ static void vc4_hdmi_encoder_pre_crtc_co
+@@ -1487,7 +1499,6 @@ static void vc4_hdmi_encoder_pre_crtc_co
  		goto err_put_runtime_pm;
  	}
  
@@ -67,7 +67,7 @@ Signed-off-by: Dave Stevenson <dave.stevenson@raspberrypi.com>
  	vc4_hdmi_cec_update_clk_div(vc4_hdmi);
  
  	if (tmds_char_rate > 297000000)
-@@ -1594,6 +1605,8 @@ static void vc4_hdmi_encoder_post_crtc_e
+@@ -1595,6 +1606,8 @@ static void vc4_hdmi_encoder_post_crtc_e
  	spin_lock_irqsave(&vc4_hdmi->hw_lock, flags);
  
  	HDMI_WRITE(HDMI_VID_CTL,
@@ -76,15 +76,15 @@ Signed-off-by: Dave Stevenson <dave.stevenson@raspberrypi.com>
  		   VC4_HD_VID_CTL_ENABLE |
  		   VC4_HD_VID_CTL_CLRRGB |
  		   VC4_HD_VID_CTL_UNDERFLOW_ENABLE |
-@@ -3127,6 +3140,7 @@ static int vc4_hdmi_runtime_suspend(stru
- {
- 	struct vc4_hdmi *vc4_hdmi = dev_get_drvdata(dev);
+@@ -3126,6 +3139,7 @@ static int vc4_hdmi_runtime_suspend(stru
+ 	HDMI_WRITE(HDMI_RAM_PACKET_CONFIG, 0);
+ 	spin_unlock_irqrestore(&vc4_hdmi->hw_lock, flags);
  
 +	clk_disable_unprepare(vc4_hdmi->audio_clock);
  	clk_disable_unprepare(vc4_hdmi->hsm_clock);
  
  	return 0;
-@@ -3159,6 +3173,10 @@ static int vc4_hdmi_runtime_resume(struc
+@@ -3157,6 +3171,10 @@ static int vc4_hdmi_runtime_resume(struc
  		goto err_disable_clk;
  	}
  
@@ -95,7 +95,7 @@ Signed-off-by: Dave Stevenson <dave.stevenson@raspberrypi.com>
  	if (vc4_hdmi->variant->reset)
  		vc4_hdmi->variant->reset(vc4_hdmi);
  
-@@ -3279,7 +3297,9 @@ static int vc4_hdmi_bind(struct device *
+@@ -3281,7 +3299,9 @@ static int vc4_hdmi_bind(struct device *
  		return ret;
  
  	if ((of_device_is_compatible(dev->of_node, "brcm,bcm2711-hdmi0") ||
@@ -106,7 +106,7 @@ Signed-off-by: Dave Stevenson <dave.stevenson@raspberrypi.com>
  	    HDMI_READ(HDMI_VID_CTL) & VC4_HD_VID_CTL_ENABLE) {
  		clk_prepare_enable(vc4_hdmi->pixel_clock);
  		clk_prepare_enable(vc4_hdmi->hsm_clock);
-@@ -3413,10 +3433,66 @@ static const struct vc4_hdmi_variant bcm
+@@ -3415,10 +3435,66 @@ static const struct vc4_hdmi_variant bcm
  	.hp_detect		= vc5_hdmi_hp_detect,
  };
  
