@@ -7,14 +7,15 @@
 #      (qoriq-{qman,bman}-portals-sdk.dtsi, qoriq-dpaa-eth.dtsi). mainline ships
 #      same-named files but with mainline FMan/DPAA bindings the NXP SDK drivers
 #      cannot probe, so the whole DPAA dts base is vendored to shadow mainline's.
-#   2. ASK's kernel patch series                  -> target/linux/layerscape/patches-6.12/
+#   2. ASK's kernel patch series for the target's kernel line (KERNEL_PATCHVER)
+#                                                 -> target/linux/layerscape/patches-<line>/
 #   3. ASK's canonical board DTS (mono-gateway-dk.dts) -> files/.../freescale/
 # OpenWrt's FILES_DIR overlay + normal patch flow then apply them onto OpenWrt's OWN
 # kernel -- no git-cloned vendor kernel, no custom Kernel/Prepare.
 #
 # ASK is the SINGLE pin. ASK's patches are developed against a specific NXP SDK
-# overlay, and ASK records that overlay in a format-neutral pin file
-# (pins/nxp-sdk-srcrev.inc, one line: NXP_SDK_SRCREV = "<sha>"). This script
+# overlay, and ASK records that overlay in a format-neutral pin file per kernel line
+# (pins/<line>/nxp-sdk-srcrev.inc, one line: NXP_SDK_SRCREV = "<sha>"). This script
 # fetches ASK@ASK_VERSION and READS that ref, so the SDK ref can never drift from
 # what ASK was built against -- ASK_VERSION is the only pin to bump.
 #
@@ -36,24 +37,32 @@ cd "$(dirname "$0")/.."
 MODE=sync
 [ "${1:-}" = "--check" ] && MODE=check
 
+# The kernel line this tree builds layerscape with picks ASK's series and SDK pin
+# for it: ASK carries every line it supports side by side (patches/kernel/<line>/,
+# pins/<line>/). An ASK from before that layout has one series and one pin.
+LINE=$(sed -n 's/^KERNEL_PATCHVER *:= *\([0-9.]*\).*/\1/p' target/linux/layerscape/Makefile | head -1)
+[ -n "$LINE" ] || { echo "ERROR: no KERNEL_PATCHVER in target/linux/layerscape/Makefile" >&2; exit 1; }
+
 # --- pins ---
 # ASK is the single authoritative pin. The NXP SDK ref is READ from ASK's recipe
 # (NXP_SDK_SRCREV) below, never hand-maintained here.
 ASK_URL="https://github.com/we-are-mono/ASK.git"
 ASK_VERSION="d8f5f634e54f6e41bfc9f0abcf75af0a83b33936"
 NXP_URL="https://github.com/nxp-qoriq/linux.git"
-ASK_SDK_PIN="pins/nxp-sdk-srcrev.inc"   # ASK's format-neutral NXP SDK SRCREV pin
 
-# ASK hooks mono must FORWARD-PORT because OpenWrt is not stock mainline: 070 re-anchors
-# onto OpenWrt's generic backport 622-v6.18-ppp-remove-rwlock-usage (write_unlock_bh ->
-# spin_unlock in ppp_connect_channel). ASK's verbatim 070 targets stock 6.12 (rwlock)
-# and won't apply here. The sync must NEITHER re-copy NOR clean these mono-owned versions;
-# they carry no ASK-verbatim drift guard (git tracks them). Re-derive on a kernel bump via
-# the quilt push-f/refresh loop.
-MONO_FWD=" 070-ask-ppp-hooks.patch "
+# ASK hooks mono must FORWARD-PORT because OpenWrt is not stock mainline: on 6.12, 070
+# re-anchors onto OpenWrt's generic backport 622-v6.18-ppp-remove-rwlock-usage
+# (write_unlock_bh -> spin_unlock in ppp_connect_channel). ASK's verbatim 6.12 070
+# targets stock 6.12 (rwlock) and won't apply here. The sync must NEITHER re-copy NOR
+# clean these mono-owned versions; they carry no ASK-verbatim drift guard (git tracks
+# them). Re-derive on a kernel bump via the quilt push-f/refresh loop.
+case "$LINE" in
+6.12) MONO_FWD=" 070-ask-ppp-hooks.patch " ;;
+*) MONO_FWD=" " ;;
+esac
 
 FILES="target/linux/layerscape/files"
-PATCHES="target/linux/layerscape/patches-6.12"
+PATCHES="target/linux/layerscape/patches-$LINE"
 ASK_MANIFEST="$PATCHES/.ask-kernel-patches"   # provenance + list of synced ASK patches, for clean re-sync / check
 BOARD_DTS="arch/arm64/boot/dts/freescale/mono-gateway-dk.dts"   # ASK-owned canonical board DTS
 
@@ -102,6 +111,41 @@ trap 'rm -rf "$KTMP" "$ATMP"' EXIT
 echo "sync-ask-kernel [$MODE]: fetching ASK @ $ASK_VERSION"
 sparse_fetch "$ASK_URL" "$ASK_VERSION" "$ATMP" patches/kernel dts pins
 
+# The kernel lines the pinned ASK is released for: its top-level RELEASED_LINES
+# (the cone sparse checkout brings top-level files along; a LOCAL archive is
+# read here). An ASK from before the file (<= mono-1.3.1) is a 6.12 release.
+case "$ASK_URL" in
+file://*) git -C "${ASK_URL#file://}" show "$ASK_VERSION:RELEASED_LINES" > "$ATMP/RELEASED_LINES" 2>/dev/null \
+	|| rm -f "$ATMP/RELEASED_LINES" ;;
+esac
+if [ -f "$ATMP/RELEASED_LINES" ]; then
+	ASK_RELEASED=$(sed 's/#.*//' "$ATMP/RELEASED_LINES" | tr -s ' \t' '\n' | grep . || true)
+else
+	ASK_RELEASED=6.12
+fi
+if ! printf '%s\n' "$ASK_RELEASED" | grep -qx "$LINE"; then
+	ASK_RELEASED_LIST=$(echo $ASK_RELEASED)
+	if [ "${MONO_ASK_UNRELEASED:-}" = 1 ]; then
+		echo "  WARNING: ASK@$ASK_VERSION is not released for kernel $LINE (lines: ${ASK_RELEASED_LIST:-none}); MONO_ASK_UNRELEASED=1 allows it"
+	else
+		echo "  ERROR: ASK@$ASK_VERSION is released for kernel ${ASK_RELEASED_LIST:-none}, not $LINE:" \
+			"pin a release whose RELEASED_LINES lists it, or set MONO_ASK_UNRELEASED=1 to build an unreleased line" >&2
+		exit 1
+	fi
+fi
+
+# ASK's format-neutral NXP SDK SRCREV pin and series for this line.
+if [ -f "$ATMP/pins/$LINE/nxp-sdk-srcrev.inc" ]; then
+	ASK_SDK_PIN="pins/$LINE/nxp-sdk-srcrev.inc"
+	ASK_SERIES="patches/kernel/$LINE"
+elif [ -f "$ATMP/pins/nxp-sdk-srcrev.inc" ]; then
+	ASK_SDK_PIN="pins/nxp-sdk-srcrev.inc"
+	ASK_SERIES="patches/kernel"
+else
+	echo "  ERROR: ASK@$ASK_VERSION carries no NXP SDK pin for kernel $LINE" >&2; exit 1
+fi
+echo "sync-ask-kernel [$MODE]: kernel $LINE, ASK series $ASK_SERIES"
+
 # The single-pin source of truth: read the NXP SDK overlay ref from ASK's pin file.
 NXP_SDK_REF=$(sed -n 's/^NXP_SDK_SRCREV *= *"\([0-9a-fA-F]\{40\}\)".*/\1/p' "$ATMP/$ASK_SDK_PIN" | head -1)
 [ -n "$NXP_SDK_REF" ] || { echo "  ERROR: could not read NXP_SDK_SRCREV from ASK $ASK_SDK_PIN" >&2; exit 1; }
@@ -145,6 +189,16 @@ arch/arm64/boot/dts/freescale/qoriq-fman3-0-1g-4.dtsi
 arch/arm64/boot/dts/freescale/qoriq-fman3-0-1g-5.dtsi
 arch/arm64/boot/dts/freescale/qoriq-fman3-0-10g-0.dtsi
 arch/arm64/boot/dts/freescale/qoriq-fman3-0-10g-1.dtsi"
+# What a line's SDK adds, as ASK's linux-ask_<line>.bb overlays it too: lf-6.18's
+# fsl-ls1046a.dtsi includes the RCPM binding header, which mainline lacks.
+case "$LINE" in
+6.18)
+	SDK_SPARSE="$SDK_SPARSE
+include/dt-bindings/soc"
+	SDK_PATHS="$SDK_PATHS
+include/dt-bindings/soc/fsl,qoriq-rcpm.h"
+	;;
+esac
 
 echo "sync-ask-kernel [$MODE]: fetching NXP SDK @ $NXP_SDK_REF"
 # shellcheck disable=SC2086
@@ -159,7 +213,7 @@ else
 	printf '%s\n' "$NXP_SDK_REF" > "$FILES/.nxp-sdk-ref"
 fi
 
-# ===== 3. ASK kernel patch series -> patches-6.12/ =====
+# ===== 3. ASK kernel patch series -> patches-<line>/ =====
 # In sync mode, drop patches ASK has since removed before re-copying (from the manifest).
 if [ "$MODE" = sync ] && [ -f "$ASK_MANIFEST" ]; then
 	while IFS= read -r old; do
@@ -170,7 +224,7 @@ if [ "$MODE" = sync ] && [ -f "$ASK_MANIFEST" ]; then
 fi
 
 fetched=""
-for f in "$ATMP"/patches/kernel/*.patch; do
+for f in "$ATMP/$ASK_SERIES"/*.patch; do
 	b=$(basename "$f")
 	case "$b" in 999-*) continue ;; esac   # legacy 5.4 monolith, never applied
 	case "$MONO_FWD" in *" $b "*) [ "$MODE" = sync ] && echo "  keeping mono forward-port (not synced): $b"; continue ;; esac
