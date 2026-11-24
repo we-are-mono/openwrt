@@ -400,16 +400,15 @@ void fman_memac_set_tx_pause_frames(struct memac_regs *regs,
 
 uint16_t fman_memac_get_max_frame_len(struct memac_regs *regs);
 
+void fman_memac_set_max_frame_len(struct memac_regs *regs,
+	uint16_t max_frame_len);
+
 void fman_memac_set_exception(struct memac_regs *regs, uint32_t val,
 	bool enable);
 
 void fman_memac_reset_stat(struct memac_regs *regs);
 
 void fman_memac_reset(struct memac_regs *regs);
-
-void fman_memac_reset_filter_table(struct memac_regs *regs);
-
-void fman_memac_set_hash_table_entry(struct memac_regs *regs, uint32_t crc);
 
 void fman_memac_set_hash_table(struct memac_regs *regs, uint32_t val);
 

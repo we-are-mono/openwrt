@@ -29,14 +29,8 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifdef CONFIG_FSL_DPAA_ETH_DEBUG
-#define pr_fmt(fmt) \
-	KBUILD_MODNAME ": %s:%hu:%s() " fmt, \
-	KBUILD_BASENAME".c", __LINE__, __func__
-#else
 #define pr_fmt(fmt) \
 	KBUILD_MODNAME ": " fmt
-#endif
 
 #include <linux/init.h>
 #include <linux/module.h>
@@ -204,8 +198,10 @@ static int __cold mac_probe(struct platform_device *_of_dev)
 		goto _return_dev_set_drvdata;
 	}
 	mac_dev->cell_index = (uint8_t)cell_index;
-	if (mac_dev->cell_index >= 8)
+	if (mac_dev->cell_index >= 8) {
 		mac_dev->cell_index -= 8;
+		mac_dev->mac_10g = true;
+	}
 
 	/* Get the MAC address */
 	_errno = of_get_mac_address(mac_node, mac_dev->addr);
@@ -273,10 +269,10 @@ static int __cold mac_probe(struct platform_device *_of_dev)
 	mac_dev->speed		= phylink_interface_max_speed(mac_dev->phy_if);
 	mac_dev->max_speed	= mac_dev->speed;
 	mac_dev->if_support = MEMAC_SUPPORTED;
-	/* We don't support half-duplex in SGMII mode */
+	/* We don't support half-duplex in SGMII / 2.5G modes */
 	if (mac_dev->phy_if == PHY_INTERFACE_MODE_SGMII ||
 	    mac_dev->phy_if == PHY_INTERFACE_MODE_QSGMII ||
-	    mac_dev->phy_if == PHY_INTERFACE_MODE_2500SGMII)
+	    mac_dev->phy_if == PHY_INTERFACE_MODE_2500BASEX)
 		mac_dev->if_support &= ~(SUPPORTED_10baseT_Half |
 					SUPPORTED_100baseT_Half);
 

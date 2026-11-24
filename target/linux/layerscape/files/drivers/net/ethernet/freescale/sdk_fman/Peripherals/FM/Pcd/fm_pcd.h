@@ -119,9 +119,6 @@ switch (exception){                                                 \
 /***********************************************************************/
 /*          Memory map                                                 */
 /***********************************************************************/
-#if defined(__MWERKS__) && !defined(__GNUC__)
-#pragma pack(push,1)
-#endif /* defined(__MWERKS__) && ... */
 
 typedef struct {
 	/* General Configuration and Status Registers */
@@ -156,9 +153,6 @@ typedef struct {
 				    * (for port-ID 1-11, only for supported Port-ID registers) */
 } t_FmPcdPlcrRegs;
 
-#if defined(__MWERKS__) && !defined(__GNUC__)
-#pragma pack(pop)
-#endif /* defined(__MWERKS__) && ... */
 
 
 /***********************************************************************/
@@ -368,6 +362,8 @@ typedef struct {
     uintptr_t                   capwapFrameIdAddr;
     bool                        advancedOffloadSupport;
 
+    uint32_t			InternalBufMgmtMuramArea; // MURAM address area used for internal buffers in EHASH
+    void *pIntMuramPtr; // MURAM pointer for internal buffers in EHASH
     t_FmPcdDriverParam          *p_FmPcdDriverParam;
 } t_FmPcd;
 
@@ -378,7 +374,6 @@ typedef uint8_t t_FmPcdFrmReplicUpdateType;
 /*  PCD internal routines                                              */
 /***********************************************************************/
 
-t_Error     PcdGetVectorForOpt(t_FmPcd *p_FmPcd, uint8_t netEnvId, protocolOpt_t opt, uint32_t *p_Vector);
 t_Error     PcdGetUnitsVector(t_FmPcd *p_FmPcd, t_NetEnvParams *p_Params);
 bool        PcdNetEnvIsUnitWithoutOpts(t_FmPcd *p_FmPcd, uint8_t netEnvId, uint32_t unitVector);
 t_Error     PcdGetClsPlanGrpParams(t_FmPcd *p_FmPcd, t_FmPcdKgInterModuleClsPlanGrpParams *p_GrpParams);
@@ -387,11 +382,6 @@ e_NetHeaderType FmPcdGetAliasHdr(t_FmPcd *p_FmPcd, uint8_t netEnvId, e_NetHeader
 uint8_t     FmPcdNetEnvGetUnitIdForSingleHdr(t_FmPcd *p_FmPcd, uint8_t netEnvId, e_NetHeaderType hdr);
 uint8_t     FmPcdNetEnvGetUnitId(t_FmPcd *p_FmPcd, uint8_t netEnvId, e_NetHeaderType hdr, bool interchangeable, protocolOpt_t opt);
 
-t_Error     FmPcdManipBuildIpReassmScheme(t_FmPcd *p_FmPcd, t_Handle h_NetEnv, t_Handle h_CcTree, t_Handle h_Manip, bool isIpv4, uint8_t groupId);
-t_Error     FmPcdManipDeleteIpReassmSchemes(t_Handle h_Manip);
-t_Error     FmPcdManipBuildCapwapReassmScheme(t_FmPcd *p_FmPcd, t_Handle h_NetEnv, t_Handle h_CcTree, t_Handle h_Manip, uint8_t groupId);
-t_Error     FmPcdManipDeleteCapwapReassmSchemes(t_Handle h_Manip);
-bool        FmPcdManipIpReassmIsIpv6Hdr(t_Handle h_Manip);
 
 t_Handle    KgConfig( t_FmPcd *p_FmPcd, t_FmPcdParams *p_FmPcdParams);
 t_Error     KgInit(t_FmPcd *p_FmPcd);
@@ -410,6 +400,7 @@ t_Error     FmPcdKgFreeSchemes(t_Handle h_FmPcd, uint8_t numOfSchemes, uint8_t g
 t_Error     KgBindPortToSchemes(t_Handle h_FmPcd , uint8_t hardwarePortId, uint32_t spReg);
 
 t_FmPcdLock *FmPcdAcquireLock(t_Handle h_FmPcd);
+t_FmPcdLock * FmPcdAcquireLockedLock(t_Handle h_FmPcd);
 void        FmPcdReleaseLock(t_Handle h_FmPcd, t_FmPcdLock *p_Lock);
 
 t_Handle    PlcrConfig(t_FmPcd *p_FmPcd, t_FmPcdParams *p_FmPcdParams);
@@ -426,9 +417,6 @@ t_Error     PlcrSetPortProfiles(t_FmPcd    *p_FmPcd,
 t_Error     PlcrClearPortProfiles(t_FmPcd *p_FmPcd, uint8_t hardwarePortId);
 
 t_Error     FmPcdCcGetGrpParams(t_Handle treeId, uint8_t grpId, uint32_t *p_GrpBits, uint8_t *p_GrpBase);
-uint8_t     FmPcdCcGetOffset(t_Handle h_CcNode);
-uint8_t     FmPcdCcGetParseCode(t_Handle h_CcNode);
-uint16_t    FmPcdCcGetNumOfKeys(t_Handle h_CcNode);
 t_Error     ValidateNextEngineParams(t_Handle h_FmPcd, t_FmPcdCcNextEngineParams *p_FmPcdCcNextEngineParams, e_FmPcdCcStatsMode supportedStatsMode);
 
 void        FmPcdManipUpdateOwner(t_Handle h_Manip, bool add);
@@ -444,16 +432,18 @@ void *      FrmReplicGroupGetSourceTableDescriptor(t_Handle h_ReplicGroup);
 void        FrmReplicGroupUpdateOwner(t_Handle h_ReplicGroup, bool add);
 void        FrmReplicGroupUpdateAd(t_Handle h_ReplicGroup, void *p_Ad, t_Handle *h_AdNew);
 
-void        FmPcdCcGetAdTablesThatPointOnReplicGroup(t_Handle   h_Node,
-                                                     t_Handle   h_ReplicGroup,
-                                                     t_List     *p_AdTables,
-                                                     uint32_t   *p_NumOfAdTables);
-
 void EnqueueNodeInfoToRelevantLst(t_List *p_List, t_CcNodeInformation *p_CcInfo, t_Handle h_Spinlock);
 void DequeueNodeInfoFromRelevantLst(t_List *p_List, t_Handle h_Info, t_Handle h_Spinlock);
 t_CcNodeInformation* FindNodeInfoInReleventLst(t_List *p_List, t_Handle h_Info, t_Handle h_Spinlock);
 t_List *FmPcdManipGetSpinlock(t_Handle h_Manip);
 t_List *FmPcdManipGetNodeLstPointedOnThisManip(t_Handle h_Manip);
+
+typedef struct
+{
+    uint8_t     *p_Hmct;
+    uint16_t    tableSize;
+    bool        parseAfterHm;
+} t_FmPcdManipHmCcParams;
 
 typedef struct
 {
@@ -510,12 +500,32 @@ static __inline__ bool FmPcdLockTryLock(t_FmPcdLock *p_Lock)
     return TRUE;
 }
 
+/* Variant that takes its spinlock with an explicit lockdep subclass.
+ * All XX_InitSpinlock()-created locks share one lockdep class, so any code
+ * path that acquires a second instance while holding the first (see
+ * FmPcdLockTryLockAll) triggers a false-positive recursive-locking warning.
+ * Pass SINGLE_DEPTH_NESTING from the inner site.
+ */
+static __inline__ bool FmPcdLockTryLockNested(t_FmPcdLock *p_Lock, int subclass)
+{
+    uint32_t intFlags;
+
+    ASSERT_COND(p_Lock);
+    intFlags = XX_LockIntrSpinlockNested(p_Lock->h_Spinlock, subclass);
+    if (p_Lock->flag)
+    {
+        XX_UnlockIntrSpinlock(p_Lock->h_Spinlock, intFlags);
+        return FALSE;
+    }
+    p_Lock->flag = TRUE;
+    XX_UnlockIntrSpinlock(p_Lock->h_Spinlock, intFlags);
+    return TRUE;
+}
+
 static __inline__ void FmPcdLockUnlock(t_FmPcdLock *p_Lock)
 {
     ASSERT_COND(p_Lock);
     p_Lock->flag = FALSE;
 }
-
-t_Handle FM_PCD_GetHcPort(t_Handle h_FmPcd);
 
 #endif /* __FM_PCD_H */

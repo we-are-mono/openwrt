@@ -80,9 +80,6 @@ typedef struct {
     t_Error (*f_FM_MAC_ConfigTbiPhyAddr) (t_Handle h_FmMac, uint8_t newVal);
     t_Error (*f_FM_MAC_ConfigException) (t_Handle h_FmMac, e_FmMacExceptions, bool enable);
     t_Error (*f_FM_MAC_ConfigResetOnInit) (t_Handle h_FmMac, bool enable);
-#ifdef FM_TX_ECC_FRMS_ERRATA_10GMAC_A004
-    t_Error (*f_FM_MAC_ConfigSkipFman11Workaround) (t_Handle h_FmMac);
-#endif /* FM_TX_ECC_FRMS_ERRATA_10GMAC_A004 */
 
     t_Error (*f_FM_MAC_SetException) (t_Handle h_FmMac, e_FmMacExceptions ex, bool enable);
 
@@ -112,8 +109,10 @@ typedef struct {
     t_Error (*f_FM_MAC_RemovelExactMatchMacAddr) (t_Handle h_FmMac, t_EnetAddr *p_EnetAddr);
 
     t_Error (*f_FM_MAC_SetPromiscuous) (t_Handle h_FmMac, bool newVal);
+    t_Error (*f_FM_MAC_SetAllMulti) (t_Handle h_FmMac, bool newVal);
     t_Error (*f_FM_MAC_AdjustLink)     (t_Handle h_FmMac, e_EnetSpeed speed, bool fullDuplex);
     t_Error (*f_FM_MAC_RestartAutoneg) (t_Handle h_FmMac);
+    t_Error (*f_FM_MAC_SetMaxFrameLength) (t_Handle h_FmMac, uint16_t newVal);
 
     t_Error (*f_FM_MAC_SetWakeOnLan)   (t_Handle h_FmMac, bool en);
 
@@ -126,9 +125,7 @@ typedef struct {
     t_Error (*f_FM_MAC_MII_WritePhyReg)(t_Handle h_FmMac, uint8_t phyAddr, uint8_t reg, uint16_t data);
     t_Error (*f_FM_MAC_MII_ReadPhyReg)(t_Handle h_FmMac,  uint8_t phyAddr, uint8_t reg, uint16_t *p_Data);
 
-#if (defined(DEBUG_ERRORS) && (DEBUG_ERRORS > 0))
     t_Error (*f_FM_MAC_DumpRegs) (t_Handle h_FmMac);
-#endif /* (defined(DEBUG_ERRORS) && ... */
 
     t_Handle            h_Fm;
     t_FmRevisionInfo    fmRevInfo;
@@ -137,8 +134,6 @@ typedef struct {
     bool                resetOnInit;
     uint16_t            clkFreq;
 } t_FmMacControllerDriver;
-
-uint16_t    FM_MAC_GetMaxFrameLength(t_Handle FmMac);
 
 /* ........................................................................... */
 

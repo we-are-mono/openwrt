@@ -48,9 +48,6 @@
 #ifdef CONFIG_FSL_DPAA_1588
 #include "dpaa_1588.h"
 #endif
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-#include "dpaa_debugfs.h"
-#endif /* CONFIG_FSL_DPAA_DBG_LOOP */
 #include "mac.h"
 
 /* Size in bytes of the FQ taildrop threshold */
@@ -79,22 +76,6 @@ static const char fsl_qman_frame_queues[][25] = {
 	[RX] = "fsl,qman-frame-queues-rx",
 	[TX] = "fsl,qman-frame-queues-tx"
 };
-#ifdef CONFIG_FSL_DPAA_HOOKS
-/* A set of callbacks for hooking into the fastpath at different points. */
-struct dpaa_eth_hooks_s dpaa_eth_hooks;
-EXPORT_SYMBOL(dpaa_eth_hooks);
-/* This function should only be called on the probe paths, since it makes no
- * effort to guarantee consistency of the destination hooks structure.
- */
-void fsl_dpaa_eth_set_hooks(struct dpaa_eth_hooks_s *hooks)
-{
-	if (hooks)
-		dpaa_eth_hooks = *hooks;
-	else
-		pr_err("NULL pointer to hooks!\n");
-}
-EXPORT_SYMBOL(fsl_dpaa_eth_set_hooks);
-#endif
 
 int dpa_netdev_init(struct net_device *net_dev,
 		    const uint8_t *mac_addr,
@@ -123,14 +104,6 @@ int dpa_netdev_init(struct net_device *net_dev,
 		return err;
 	}
 
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-	/* create debugfs entry for this net_device */
-	err = dpa_netdev_debugfs_create(net_dev);
-	if (err) {
-		unregister_netdev(net_dev);
-		return err;
-	}
-#endif /* CONFIG_FSL_DPAA_DBG_LOOP */
 
 	return 0;
 }
@@ -166,12 +139,18 @@ int __cold dpa_start(struct net_device *net_dev)
 	}
 
 	netif_tx_start_all_queues(net_dev);
+	dpa_update_eth_if(priv);
 
 	return 0;
 
 mac_start_failed:
 	for_each_port_device(i, mac_dev->port_dev)
 		fm_port_disable(mac_dev->port_dev[i]);
+	/* Let the PHY go as dpa_stop() does, or the next open finds it
+	 * attached and fails too. */
+	if (mac_dev->phy_dev)
+		phy_disconnect(mac_dev->phy_dev);
+	mac_dev->phy_dev = NULL;
 
 	return err;
 }
@@ -186,11 +165,13 @@ int __cold dpa_stop(struct net_device *net_dev)
 	priv = netdev_priv(net_dev);
 	mac_dev = priv->mac_dev;
 
+	dpa_update_eth_if(priv);
+
 	netif_tx_stop_all_queues(net_dev);
 	/* Allow the Fman (Tx) port to process in-flight frames before we
 	 * try switching it off.
 	 */
-	usleep_range(5000, 10000);
+	msleep(200);
 
 	_errno = mac_dev->stop(mac_dev);
 	if (unlikely(_errno < 0))
@@ -206,6 +187,8 @@ int __cold dpa_stop(struct net_device *net_dev)
 	if (mac_dev->phy_dev)
 		phy_disconnect(mac_dev->phy_dev);
 	mac_dev->phy_dev = NULL;
+
+	msleep(200);
 
 	return _errno;
 }
@@ -296,6 +279,15 @@ int dpa_set_features(struct net_device *dev, netdev_features_t features)
 	return 0;
 }
 EXPORT_SYMBOL(dpa_set_features);
+
+netdev_features_t dpa_fix_features(struct net_device *dev,
+				   netdev_features_t features)
+{
+	/* Rx checksum validation is supported: dpa_set_features() switches the
+	 * parser's L4 check, and _dpa_process_parse_results() trusts it only
+	 * when the parse result says the checksum passed. */
+	return features;
+}
 
 #ifdef CONFIG_FSL_DPAA_TS
 u64 dpa_get_timestamp_ns(const struct dpa_priv_s *priv, enum port_type rx_tx,
@@ -432,6 +424,13 @@ int dpa_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 }
 EXPORT_SYMBOL(dpa_ioctl);
 
+void dpa_destroy_cgr(struct qman_cgr *cgr)
+{
+	qman_delete_cgr_safe(cgr);
+	qman_release_cgrid(cgr->cgrid);
+}
+EXPORT_SYMBOL(dpa_destroy_cgr);
+
 void __cold dpa_remove(struct platform_device *of_dev)
 {
 	struct device		*dev;
@@ -450,10 +449,9 @@ void __cold dpa_remove(struct platform_device *of_dev)
 
 	dpa_fq_free(dev, &priv->dpa_fq_list);
 
-	qman_delete_cgr_safe(&priv->ingress_cgr);
-	qman_release_cgrid(priv->ingress_cgr.cgrid);
-	qman_delete_cgr_safe(&priv->cgr_data.cgr);
-	qman_release_cgrid(priv->cgr_data.cgr.cgrid);
+	dpa_destroy_cgr(&priv->ingress_cgr);
+	dpa_destroy_cgr(&priv->ingress_cgr_hi_prio);
+	dpa_destroy_cgr(&priv->cgr_data.cgr);
 
 	dpa_private_napi_del(net_dev);
 
@@ -462,10 +460,6 @@ void __cold dpa_remove(struct platform_device *of_dev)
 	if (priv->buf_layout)
 		devm_kfree(dev, priv->buf_layout);
 
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-	/* remove debugfs entry for this net_device */
-	dpa_netdev_debugfs_remove(net_dev);
-#endif /* CONFIG_FSL_DPAA_DBG_LOOP */
 
 #ifdef CONFIG_FSL_DPAA_1588
 	if (priv->tsu && priv->tsu->valid)
@@ -588,6 +582,16 @@ void dpa_set_rx_mode(struct net_device *net_dev)
 					   "mac_dev->set_promisc() = %d\n",
 					   _errno);
 	}
+	if (!!(net_dev->flags & IFF_ALLMULTI) != priv->mac_dev->allmulti) {
+		priv->mac_dev->allmulti = !priv->mac_dev->allmulti;
+		_errno = priv->mac_dev->set_allmulti(
+				priv->mac_dev->get_mac_handle(priv->mac_dev),
+				priv->mac_dev->allmulti);
+		if (unlikely(_errno < 0) && netif_msg_drv(priv))
+			netdev_err(net_dev,
+					   "mac_dev->set_allmulti() = %d\n",
+					   _errno);
+	}
 
 	_errno = priv->mac_dev->set_multi(net_dev, priv->mac_dev);
 	if (unlikely(_errno < 0) && netif_msg_drv(priv))
@@ -608,6 +612,7 @@ void dpa_set_buffers_layout(struct mac_device *mac_dev,
 	layout[RX].time_stamp = true;
 #endif
 	fm_port_get_buff_layout_ext_params(mac_dev->port_dev[RX], &params);
+	pr_debug("%s: internal buffer offset %d\n", __func__, params.manip_extra_space);
 	layout[RX].manip_extra_space = params.manip_extra_space;
 	/* a value of zero for data alignment means "don't care", so align to
 	 * a non-zero value to prevent FMD from using its own default
@@ -639,13 +644,6 @@ dpa_bp_alloc(struct dpa_bp *dpa_bp, struct device *dev)
 	}
 
 	memset(&bp_params, 0, sizeof(struct bman_pool_params));
-#ifdef CONFIG_FMAN_PFC
-	bp_params.flags = BMAN_POOL_FLAG_THRESH;
-	bp_params.thresholds[0] = bp_params.thresholds[2] =
-			CONFIG_FSL_DPAA_ETH_REFILL_THRESHOLD;
-	bp_params.thresholds[1] = bp_params.thresholds[3] =
-			CONFIG_FSL_DPAA_ETH_MAX_BUF_COUNT;
-#endif
 
 	/* If the pool is already specified, we only create one per bpid */
 	if (dpa_bpid2pool_use(dpa_bp->bpid))
@@ -712,13 +710,17 @@ void dpa_bp_drain(struct dpa_bp *bp)
 			dma_unmap_single(bp->dev, addr, bp->size,
 					DMA_BIDIRECTIONAL);
 
+			/* For the private ports' pool this puts the page and
+			 * leaves the skb built on it (_dpa_bp_add_8_bufs()).
+			 * Reached only as the last private port is removed,
+			 * which never happens to this built-in driver. */
 			bp->free_buf_cb(phys_to_virt(addr));
 		}
 	} while (ret > 0);
 }
 EXPORT_SYMBOL(dpa_bp_drain);
 
-static void __cold __attribute__((nonnull))
+void __cold __attribute__((nonnull))
 _dpa_bp_free(struct dpa_bp *dpa_bp)
 {
 	struct dpa_bp *bp = dpa_bpid2pool(dpa_bp->bpid);
@@ -739,6 +741,7 @@ _dpa_bp_free(struct dpa_bp *dpa_bp)
 	dpa_bp_array[bp->bpid] = NULL;
 	bman_free_pool(bp->pool);
 }
+EXPORT_SYMBOL(_dpa_bp_free);
 
 void __cold __attribute__((nonnull))
 dpa_bp_free(struct dpa_priv_s *priv)
@@ -773,14 +776,6 @@ bool dpa_bpid2pool_use(int bpid)
 	return false;
 }
 
-#ifdef CONFIG_FMAN_PFC
-u16 dpa_select_queue(struct net_device *net_dev, struct sk_buff *skb,
-		     struct net_device *sb_dev,
-		     select_queue_fallback_t fallback)
-{
-	return dpa_get_queue_mapping(skb);
-}
-#endif
 
 struct dpa_fq *dpa_fq_alloc(struct device *dev,
 			    u32 fq_start,
@@ -806,12 +801,6 @@ struct dpa_fq *dpa_fq_alloc(struct device *dev,
 		list_add_tail(&dpa_fq[i].list, list);
 	}
 
-#ifdef CONFIG_FMAN_PFC
-	if (fq_type == FQ_TYPE_TX)
-		for (i = 0; i < fq_count; i++)
-			dpa_fq[i].wq = i / dpa_num_cpus;
-	else
-#endif
 		for (i = 0; i < fq_count; i++)
 			_dpa_assign_wq(dpa_fq + i);
 
@@ -934,18 +923,24 @@ invalid_error_queue:
 EXPORT_SYMBOL(dpa_fq_probe_mac);
 
 static u32 rx_pool_channel;
-static DEFINE_SPINLOCK(rx_pool_channel_init);
+/* qman_alloc_pool() → dpa_alloc_new() → kmalloc(GFP_KERNEL), which may
+ * sleep under direct reclaim. This one-shot init only runs during probe
+ * (process context), so a mutex is the correct primitive — the original
+ * spinlock was an unprovoked atomic-context violation that made
+ * CONFIG_DEBUG_ATOMIC_SLEEP WARN and would deadlock under memory pressure.
+ */
+static DEFINE_MUTEX(rx_pool_channel_init);
 
 int dpa_get_channel(void)
 {
-	spin_lock(&rx_pool_channel_init);
+	mutex_lock(&rx_pool_channel_init);
 	if (!rx_pool_channel) {
 		u32 pool;
 		int ret = qman_alloc_pool(&pool);
 		if (!ret)
 			rx_pool_channel = pool;
 	}
-	spin_unlock(&rx_pool_channel_init);
+	mutex_unlock(&rx_pool_channel_init);
 	if (!rx_pool_channel)
 		return -ENOMEM;
 	return rx_pool_channel;
@@ -1168,6 +1163,22 @@ void dpa_fq_setup(struct dpa_priv_s *priv, const struct dpa_fq_cbs_t *fq_cbs,
 }
 EXPORT_SYMBOL(dpa_fq_setup);
 
+static void dpa_fq_init_cgr(struct qm_mcc_initfq *initfq, uint8_t cgid)
+{
+	initfq->we_mask |= QM_INITFQ_WE_CGID;
+	initfq->fqd.fq_ctrl |= QM_FQCTRL_CGE;
+	initfq->fqd.cgid = cgid;
+}
+
+static void dpa_fq_init_cgr_oac(struct qm_mcc_initfq *initfq, uint8_t cgid,
+				signed char oal)
+{
+	dpa_fq_init_cgr(initfq, cgid);
+	initfq->we_mask |= QM_INITFQ_WE_OAC;
+	initfq->fqd.oac_init.oac = QM_OAC_CG;
+	initfq->fqd.oac_init.oal = oal;
+}
+
 int dpa_fq_init(struct dpa_fq *dpa_fq, bool td_enable)
 {
 	int			 _errno;
@@ -1194,6 +1205,9 @@ int dpa_fq_init(struct dpa_fq *dpa_fq, bool td_enable)
 	fq = &dpa_fq->fq_base;
 
 	if (dpa_fq->init) {
+		signed char oal = min(sizeof(struct sk_buff) + priv->tx_headroom,
+				      (size_t)FSL_QMAN_MAX_OAL);
+
 		memset(&initfq, 0, sizeof(initfq));
 
 		initfq.we_mask = QM_INITFQ_WE_FQCTRL;
@@ -1217,11 +1231,8 @@ int dpa_fq_init(struct dpa_fq *dpa_fq, bool td_enable)
 		 * place them in the netdev's CGR, along with the Tx FQs.
 		 */
 		if (dpa_fq->fq_type == FQ_TYPE_TX ||
-				dpa_fq->fq_type == FQ_TYPE_TX_CONFIRM ||
-				dpa_fq->fq_type == FQ_TYPE_TX_CONF_MQ) {
-			initfq.we_mask |= QM_INITFQ_WE_CGID;
-			initfq.fqd.fq_ctrl |= QM_FQCTRL_CGE;
-			initfq.fqd.cgid = (uint8_t)priv->cgr_data.cgr.cgrid;
+		    dpa_fq->fq_type == FQ_TYPE_TX_CONFIRM ||
+		    dpa_fq->fq_type == FQ_TYPE_TX_CONF_MQ)
 			/* Set a fixed overhead accounting, in an attempt to
 			 * reduce the impact of fixed-size skb shells and the
 			 * driver's needed headroom on system memory. This is
@@ -1231,12 +1242,8 @@ int dpa_fq_init(struct dpa_fq *dpa_fq, bool td_enable)
 			 * insufficient value, but even that is better than
 			 * no overhead accounting at all.
 			 */
-			initfq.we_mask |= QM_INITFQ_WE_OAC;
-			initfq.fqd.oac_init.oac = QM_OAC_CG;
-			initfq.fqd.oac_init.oal =
-				(signed char)(min(sizeof(struct sk_buff) +
-				priv->tx_headroom, (size_t)FSL_QMAN_MAX_OAL));
-		}
+			dpa_fq_init_cgr_oac(&initfq, priv->cgr_data.cgr.cgrid,
+					    oal);
 
 		if (td_enable) {
 			initfq.we_mask |= QM_INITFQ_WE_TDTHRESH;
@@ -1267,24 +1274,19 @@ int dpa_fq_init(struct dpa_fq *dpa_fq, bool td_enable)
 			}
 		}
 
-		/* Put all *private* ingress queues in our "ingress CGR". */
+		/* Put all *private* ingress queues in our "ingress CGRs".
+		 * The groups count frames, so no per-frame byte overhead is
+		 * accounted.
+		 */
 		if (priv->use_ingress_cgr &&
-				(dpa_fq->fq_type == FQ_TYPE_RX_DEFAULT ||
-				 dpa_fq->fq_type == FQ_TYPE_RX_ERROR ||
-				 dpa_fq->fq_type == FQ_TYPE_RX_PCD ||
-				 dpa_fq->fq_type == FQ_TYPE_RX_PCD_HI_PRIO)) {
-			initfq.we_mask |= QM_INITFQ_WE_CGID;
-			initfq.fqd.fq_ctrl |= QM_FQCTRL_CGE;
-			initfq.fqd.cgid = (uint8_t)priv->ingress_cgr.cgrid;
-			/* Set a fixed overhead accounting, just like for the
-			 * egress CGR.
-			 */
-			initfq.we_mask |= QM_INITFQ_WE_OAC;
-			initfq.fqd.oac_init.oac = QM_OAC_CG;
-			initfq.fqd.oac_init.oal =
-				(signed char)(min(sizeof(struct sk_buff) +
-				priv->tx_headroom, (size_t)FSL_QMAN_MAX_OAL));
-		}
+		    (dpa_fq->fq_type == FQ_TYPE_RX_DEFAULT ||
+		     dpa_fq->fq_type == FQ_TYPE_RX_ERROR ||
+		     dpa_fq->fq_type == FQ_TYPE_RX_PCD))
+			dpa_fq_init_cgr(&initfq, priv->ingress_cgr.cgrid);
+
+		if (priv->use_ingress_cgr &&
+		    dpa_fq->fq_type == FQ_TYPE_RX_PCD_HI_PRIO)
+			dpa_fq_init_cgr(&initfq, priv->ingress_cgr_hi_prio.cgrid);
 
 		/* Initialization common to all ingress queues */
 		if (dpa_fq->flags & QMAN_FQ_FLAG_NO_ENQUEUE) {
@@ -1435,18 +1437,9 @@ dpaa_eth_init_rx_port(struct fm_port *port, struct dpa_bp *bp, size_t count,
 			   buf_layout, frag_enabled);
 }
 
-#if defined(CONFIG_FSL_SDK_FMAN_TEST)
-/* Defined as weak, to be implemented by fman pcd tester. */
-int dpa_alloc_pcd_fqids(struct device *, uint32_t, uint8_t, uint32_t *)
-__attribute__((weak));
-
-int dpa_free_pcd_fqids(struct device *, uint32_t) __attribute__((weak));
-#else
 int dpa_alloc_pcd_fqids(struct device *, uint32_t, uint8_t, uint32_t *);
 
 int dpa_free_pcd_fqids(struct device *, uint32_t);
-
-#endif /* CONFIG_FSL_SDK_FMAN_TEST */
 
 
 int dpa_alloc_pcd_fqids(struct device *dev, uint32_t num,
@@ -1543,8 +1536,9 @@ void dpa_release_sgt(struct qm_sg_entry *sgt)
 }
 EXPORT_SYMBOL(dpa_release_sgt);
 
-void __attribute__((nonnull))
-dpa_fd_release(const struct net_device *net_dev, const struct qm_fd *fd)
+// net_dev is not used internally, so commenting non null check
+//void __attribute__((nonnull))
+void dpa_fd_release(const struct net_device *net_dev, const struct qm_fd *fd)
 {
 	struct qm_sg_entry	*sgt;
 	struct dpa_bp		*dpa_bp;
@@ -1735,7 +1729,7 @@ return_error:
 }
 EXPORT_SYMBOL(dpa_enable_tx_csum);
 
-#ifdef CONFIG_FSL_DPAA_CEETM
+#ifdef CONFIG_CPE_FAST_PATH
 void dpa_enable_ceetm(struct net_device *dev)
 {
 	struct dpa_priv_s *priv = netdev_priv(dev);
@@ -1750,3 +1744,36 @@ void dpa_disable_ceetm(struct net_device *dev)
 }
 EXPORT_SYMBOL(dpa_disable_ceetm);
 #endif
+
+void dpa_set_eth_ifinfo(struct dpa_priv_s *priv, void* ifinfo)
+{
+	if(!priv)
+		return;
+	priv->ifinfo = ifinfo;
+	return;
+}
+EXPORT_SYMBOL(dpa_set_eth_ifinfo);
+
+
+void dpa_reset_eth_ifinfo(struct dpa_priv_s *priv)
+{
+	if(!priv)
+		return;
+	priv->ifinfo = NULL;
+	return;
+}
+EXPORT_SYMBOL(dpa_reset_eth_ifinfo);
+
+int dpa_update_eth_if(struct dpa_priv_s *priv)
+{
+	unsigned int port_status;
+	if(!priv->ifinfo || !priv->net_dev)
+		return 1;
+	port_status = test_bit(__LINK_STATE_START,
+							&priv->net_dev->state);
+		/* Synch tx port here */
+		((struct en_ehash_ifportinfo*)(priv->ifinfo))->txpinfo.port_info = ntohl(port_status);
+
+		return 0;
+}
+EXPORT_SYMBOL(dpa_update_eth_if);

@@ -1,3 +1,5 @@
+KASAN_SANITIZE := n
+
 #
 # Makefile for the Freescale Ethernet controllers
 #
@@ -11,16 +13,12 @@ ccflags-y += -I$(NET_DPA)
 obj-$(CONFIG_FSL_SDK_DPAA_ETH) += fsl_mac.o fsl_dpa.o
 
 fsl_dpa-objs += dpaa_ethtool.o dpaa_eth_sysfs.o dpaa_eth.o dpaa_eth_sg.o dpaa_eth_common.o
-ifeq ($(CONFIG_FSL_DPAA_DBG_LOOP),y)
-fsl_dpa-objs += dpaa_debugfs.o
-endif
+# The receive pool's watch reads each port's BMI counters through its FMan
+# port handle (lnxwrp_fm.h).
+fsl_dpa-objs += dpaa_eth_pool.o
+CFLAGS_dpaa_eth_pool.o += -I$(srctree)/drivers/net/ethernet/freescale/sdk_fman/src/wrapper
 ifeq ($(CONFIG_FSL_DPAA_1588),y)
 fsl_dpa-objs += dpaa_1588.o
-endif
-
-ifeq ($(CONFIG_FSL_DPAA_CEETM),y)
-ccflags-y += -I$(srctree)/drivers/net/ethernet/freescale/sdk_fman/src/wrapper
-fsl_dpa-objs += dpaa_eth_ceetm.o
 endif
 
 fsl_mac-objs += mac.o mac-api.o

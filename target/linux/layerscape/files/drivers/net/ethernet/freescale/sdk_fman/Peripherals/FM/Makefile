@@ -1,3 +1,5 @@
+KASAN_SANITIZE := n
+
 #
 # Makefile for the Freescale Ethernet controllers
 #
@@ -19,5 +21,3 @@ obj-y		+= Pcd/
 obj-y		+= SP/
 obj-y		+= Port/
 obj-y		+= HC/
-
-obj-$(CONFIG_FSL_SDK_FMAN_RTC_API)	+= Rtc/

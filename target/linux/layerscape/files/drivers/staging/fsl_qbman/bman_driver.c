@@ -49,7 +49,6 @@ static struct bman_portal *shared_portals[NR_CPUS];
 static int num_shared_portals;
 static int shared_portals_idx;
 static LIST_HEAD(unused_pcfgs);
-static DEFINE_SPINLOCK(unused_pcfgs_lock);
 static void *affine_bportals[NR_CPUS];
 
 static int __init fsl_bpool_init(struct device_node *node)
@@ -190,7 +189,6 @@ static struct bm_portal_config * __init parse_pcfg(struct device_node *node)
 	if (len != (unsigned long)len)
 		goto err;
 
-#if defined(CONFIG_ARM) || defined(CONFIG_ARM64)
 	pcfg->addr_virt[DPA_PORTAL_CE] = ioremap_cache_ns(
                                 pcfg->addr_phys[DPA_PORTAL_CE].start,
                                 resource_size(&pcfg->addr_phys[DPA_PORTAL_CE]));
@@ -198,16 +196,6 @@ static struct bm_portal_config * __init parse_pcfg(struct device_node *node)
                                 pcfg->addr_phys[DPA_PORTAL_CI].start,
                                 resource_size(&pcfg->addr_phys[DPA_PORTAL_CI]));
 
-#else
-	pcfg->addr_virt[DPA_PORTAL_CE] =
-		memremap(pcfg->addr_phys[DPA_PORTAL_CE].start,
-			 (unsigned long)len, MEMREMAP_WB);
-
-	pcfg->addr_virt[DPA_PORTAL_CI] =
-		ioremap(pcfg->addr_phys[DPA_PORTAL_CI].start,
-			resource_size(&pcfg->addr_phys[DPA_PORTAL_CI]));
-
-#endif
 	/* disable bp depletion */
 	__raw_writel(0x0, pcfg->addr_virt[DPA_PORTAL_CI] + BM_REG_SCN(0));
 	__raw_writel(0x0, pcfg->addr_virt[DPA_PORTAL_CI] + BM_REG_SCN(1));
@@ -225,45 +213,6 @@ static struct bm_portal_config *get_pcfg(struct list_head *list)
 	pcfg = list_entry(list->prev, struct bm_portal_config, list);
 	list_del(&pcfg->list);
 	return pcfg;
-}
-
-static struct bm_portal_config *get_pcfg_idx(struct list_head *list,
-					     uint32_t idx)
-{
-	struct bm_portal_config *pcfg;
-	if (list_empty(list))
-		return NULL;
-	list_for_each_entry(pcfg, list, list) {
-		if (pcfg->public_cfg.index == idx) {
-			list_del(&pcfg->list);
-			return pcfg;
-		}
-	}
-	return NULL;
-}
-
-struct bm_portal_config *bm_get_unused_portal(void)
-{
-	return bm_get_unused_portal_idx(QBMAN_ANY_PORTAL_IDX);
-}
-
-struct bm_portal_config *bm_get_unused_portal_idx(uint32_t idx)
-{
-	struct bm_portal_config *ret;
-	spin_lock(&unused_pcfgs_lock);
-	if (idx == QBMAN_ANY_PORTAL_IDX)
-		ret = get_pcfg(&unused_pcfgs);
-	else
-		ret = get_pcfg_idx(&unused_pcfgs, idx);
-	spin_unlock(&unused_pcfgs_lock);
-	return ret;
-}
-
-void bm_put_unused_portal(struct bm_portal_config *pcfg)
-{
-	spin_lock(&unused_pcfgs_lock);
-	list_add(&pcfg->list, &unused_pcfgs);
-	spin_unlock(&unused_pcfgs_lock);
 }
 
 static struct bman_portal *init_pcfg(struct bm_portal_config *pcfg)

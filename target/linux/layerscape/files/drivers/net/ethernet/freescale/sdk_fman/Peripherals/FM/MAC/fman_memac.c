@@ -249,18 +249,6 @@ void fman_memac_set_exception(struct memac_regs *regs, uint32_t val, bool enable
     iowrite32be(tmp, &regs->imask);
 }
 
-void fman_memac_reset_filter_table(struct memac_regs *regs)
-{
-	uint32_t i;
-	for (i = 0; i < 64; i++)
-		iowrite32be(i & ~HASH_CTRL_MCAST_EN, &regs->hashtable_ctrl);
-}
-
-void fman_memac_set_hash_table_entry(struct memac_regs *regs, uint32_t crc)
-{
-	iowrite32be(crc | HASH_CTRL_MCAST_EN, &regs->hashtable_ctrl);
-}
-
 void fman_memac_set_hash_table(struct memac_regs *regs, uint32_t val)
 {
     iowrite32be(val, &regs->hashtable_ctrl);
@@ -273,6 +261,16 @@ uint16_t fman_memac_get_max_frame_len(struct memac_regs *regs)
     tmp = ioread32be(&regs->maxfrm);
 
     return(uint16_t)tmp;
+}
+
+/* Written as is, with Rx possibly running: nothing quiesces the MAC around
+ * the write. Every runtime change of the limit funnels through here, so
+ * should the hardware need Rx disabled for it, this is the one place to do
+ * so. */
+void fman_memac_set_max_frame_len(struct memac_regs *regs,
+	uint16_t max_frame_len)
+{
+    iowrite32be((uint32_t)max_frame_len, &regs->maxfrm);
 }
 
 

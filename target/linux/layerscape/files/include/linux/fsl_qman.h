@@ -36,6 +36,14 @@
 extern "C" {
 #endif
 
+struct qman_poll_ctx;
+struct napi_struct;
+struct sk_buff;
+
+void qman_portal_napi_gro_receive(struct qman_poll_ctx *ctx,
+				  struct napi_struct *napi,
+				  struct sk_buff *skb);
+
 /* Last updated for v00.800 of the BG */
 
 /* Hardware constants */
@@ -150,15 +158,6 @@ enum qm_fd_format {
 struct qm_fd {
 	union {
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u8 dd:2;	/* dynamic debug */
-			u8 liodn_offset:6;
-			u8 bpid:8;	/* Buffer Pool ID */
-			u8 eliodn_offset:4;
-			u8 __reserved:4;
-			u8 addr_hi;	/* high 8-bits of 40-bit address */
-			u32 addr_lo;	/* low 32-bits of 40-bit address */
-#else
 			u32 addr_lo;    /* low 32-bits of 40-bit address */
 			u8 addr_hi;     /* high 8-bits of 40-bit address */
 			u8 __reserved:4;
@@ -166,16 +165,10 @@ struct qm_fd {
 			u8 bpid:8;      /* Buffer Pool ID */
 			u8 liodn_offset:6;
 			u8 dd:2;        /* dynamic debug */
-#endif
 		};
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u64 __notaddress:24;
-			u64 addr:40;
-#else
 			u64 addr:40;
 			u64 __notaddress:24;
-#endif
 		};
 		u64 opaque_addr;
 	};
@@ -190,35 +183,19 @@ struct qm_fd {
 		u32 opaque;
 		/* If 'format' is _contig or _sg, 20b length and 9b offset */
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			enum qm_fd_format format:3;
-			u16 offset:9;
-			u32 length20:20;
-#else
 			u32 length20:20;
 			u16 offset:9;
 			enum qm_fd_format format:3;
-#endif
 		};
 		/* If 'format' is _contig_big or _sg_big, 29b length */
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			enum qm_fd_format _format1:3;
-			u32 length29:29;
-#else
 			u32 length29:29;
 			enum qm_fd_format _format1:3;
-#endif
 		};
 		/* If 'format' is _compound, 29b "congestion weight" */
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			enum qm_fd_format _format2:3;
-			u32 cong_weight:29;
-#else
 			u32 cong_weight:29;
 			enum qm_fd_format _format2:3;
-#endif
 		};
 	};
 	union {
@@ -264,38 +241,21 @@ static inline dma_addr_t qm_fd_addr(const struct qm_fd *fd)
 struct qm_sg_entry {
 	union {
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u8 __reserved1[3];
-			u8 addr_hi;	/* high 8-bits of 40-bit address */
-			u32 addr_lo;	/* low 32-bits of 40-bit address */
-#else
 			u32 addr_lo;	/* low 32-bits of 40-bit address */
 			u8 addr_hi;	/* high 8-bits of 40-bit address */
 			u8 __reserved1[3];
-#endif
 		};
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u64 __notaddress:24;
-			u64 addr:40;
-#else
 			u64 addr:40;
 			u64 __notaddress:24;
-#endif
 		};
 		u64 opaque;
 	};
 	union {
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u32 extension:1;	/* Extension bit */
-			u32 final:1;		/* Final bit */
-			u32 length:30;
-#else
 			u32 length:30;
 			u32 final:1;            /* Final bit */
 			u32 extension:1;        /* Extension bit */
-#endif
 		};
 		u32 sgt_efl;
 	};
@@ -303,28 +263,17 @@ struct qm_sg_entry {
 	u8 bpid;
 	union {
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u16 __reserved3:3;
-			u16 offset:13;
-#else
 			u16 offset:13;
 			u16 __reserved3:3;
-#endif
 		};
 		u16 opaque_offset;
 	};
 } __packed;
 union qm_sg_efl {
 	struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-		u32 extension:1;	/* Extension bit */
-		u32 final:1;		/* Final bit */
-		u32 length:30;
-#else
 		u32 length:30;
 		u32 final:1;            /* Final bit */
 		u32 extension:1;        /* Extension bit */
-#endif
 	};
 	u32 efl;
 };
@@ -478,15 +427,9 @@ struct qm_mr_entry {
 		} __packed __aligned(32) ern;
 		struct {
 			u8 verb;
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u8 colour:2;	/* See QM_MR_DCERN_COLOUR_* */
-			u8 __reserved1:3;
-			enum qm_dc_portal portal:3;
-#else
 			enum qm_dc_portal portal:3;
 			u8 __reserved1:3;
 			u8 colour:2;	/* See QM_MR_DCERN_COLOUR_* */
-#endif
 			u16 __reserved2;
 			u8 rc;		/* Rejection Code */
 			u32 __reserved3:24;
@@ -539,41 +482,21 @@ struct qm_mr_entry {
  * representation. */
 struct qm_fqd_stashing {
 	/* See QM_STASHING_EXCL_<...> */
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	u8 exclusive;
-	u8 __reserved1:2;
-	/* Numbers of cachelines */
-	u8 annotation_cl:2;
-	u8 data_cl:2;
-	u8 context_cl:2;
-#else
 	u8 context_cl:2;
 	u8 data_cl:2;
 	u8 annotation_cl:2;
 	u8 __reserved1:2;
 	u8 exclusive;
-#endif
 } __packed;
 struct qm_fqd_taildrop {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	u16 __reserved1:3;
-	u16 mant:8;
-	u16 exp:5;
-#else
 	u16 exp:5;
 	u16 mant:8;
 	u16 __reserved1:3;
-#endif
 } __packed;
 struct qm_fqd_oac {
 	/* See QM_OAC_<...> */
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	u8 oac:2; /* "Overhead Accounting Control" */
-	u8 __reserved1:6;
-#else
 	u8 __reserved1:6;
 	u8 oac:2; /* "Overhead Accounting Control" */
-#endif
 	/* Two's-complement value (-128 to +127) */
 	signed char oal; /* "Overhead Accounting Length" */
 } __packed;
@@ -581,17 +504,10 @@ struct qm_fqd {
 	union {
 		u8 orpc;
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u8 __reserved1:2;
-			u8 orprws:3;
-			u8 oa:1;
-			u8 olws:2;
-#else
 			u8 olws:2;
 			u8 oa:1;
 			u8 orprws:3;
 			u8 __reserved1:2;
-#endif
 		} __packed;
 	};
 	u8 cgid;
@@ -599,22 +515,12 @@ struct qm_fqd {
 	union {
 		u16 dest_wq;
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u16 channel:13; /* qm_channel */
-			u16 wq:3;
-#else
 			u16 wq:3;
 			u16 channel:13; /* qm_channel */
-#endif
 		} __packed dest;
 	};
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 	u16 __reserved2:1;
 	u16 ics_cred:15;
-#else
-	u16 __reserved2:1;
-	u16 ics_cred:15;
-#endif
 	/* For "Initialize Frame Queue" commands, the write-enable mask
 	 * determines whether 'td' or 'oac_init' is observed. For query
 	 * commands, this field is always 'td', and 'oac_query' (below) reflects
@@ -628,28 +534,15 @@ struct qm_fqd {
 		/* Treat it as 64-bit opaque */
 		u64 opaque;
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u32 hi;
-			u32 lo;
-#else
 			u32 lo;
 			u32 hi;
-#endif
 		};
 		/* Treat it as s/w portal stashing config */
 		/* See 1.5.6.7.1: "FQD Context_A field used for [...] */
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			struct qm_fqd_stashing stashing;
-			/* 48-bit address of FQ context to
-			 * stash, must be cacheline-aligned */
-			u16 context_hi;
-			u32 context_lo;
-#else
 			u32 context_lo;
 			u16 context_hi;
 			struct qm_fqd_stashing stashing;
-#endif
 		} __packed;
 	} context_a;
 	struct qm_fqd_oac oac_query;
@@ -744,19 +637,11 @@ struct qm_cgr_wr_parm {
 	union {
 		u32 word;
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u32 MA:8;
-			u32 Mn:5;
-			u32 SA:7; /* must be between 64-127 */
-			u32 Sn:6;
-			u32 Pn:6;
-#else
 			u32 Pn:6;
 			u32 Sn:6;
 			u32 SA:7; /* must be between 64-127 */
 			u32 Mn:5;
 			u32 MA:8;
-#endif
 		} __packed;
 	};
 } __packed;
@@ -770,15 +655,9 @@ struct qm_cgr_cs_thres {
 	union {
 		u16 hword;
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u16 __reserved:3;
-			u16 TA:8;
-			u16 Tn:5;
-#else
 			u16 Tn:5;
 			u16 TA:8;
 			u16 __reserved:3;
-#endif
 		} __packed;
 	};
 } __packed;
@@ -795,13 +674,8 @@ struct __qm_mc_cgr {
 	u8 cscn_en;	/* boolean, use QM_CGR_EN */
 	union {
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u16 cscn_targ_upd_ctrl; /* use QM_CSCN_TARG_UDP_ */
-			u16 cscn_targ_dcp_low;  /* CSCN_TARG_DCP low-16bits */
-#else
 			u16 cscn_targ_dcp_low;  /* CSCN_TARG_DCP low-16bits */
 			u16 cscn_targ_upd_ctrl; /* use QM_CSCN_TARG_UDP_ */
-#endif
 		};
 		u32 cscn_targ;	/* use QM_CGR_TARG_* */
 	};
@@ -907,13 +781,8 @@ struct qm_mcc_querywq {
 	union {
 		u16 channel_wq; /* ignores wq (3 lsbits) */
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u16 id:13; /* qm_channel */
-			u16 __reserved1:3;
-#else
 			u16 __reserved1:3;
 			u16 id:13; /* qm_channel */
-#endif
 		} __packed channel;
 	};
 	u8 __reserved2[60];
@@ -973,17 +842,10 @@ struct qm_mcc_ceetm_class_scheduler_config {
 	u16 cqcid;
 	u8 dcpid;
 	u8 __reserved2[6];
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	u8 gpc_reserved:1;
-	u8 gpc_combine_flag:1;
-	u8 gpc_prio_b:3;
-	u8 gpc_prio_a:3;
-#else
 	u8 gpc_prio_a:3;
 	u8 gpc_prio_b:3;
 	u8 gpc_combine_flag:1;
 	u8 gpc_reserved:1;
-#endif
 	u16 crem;
 	u16 erem;
 	u8 w[8];
@@ -1018,37 +880,20 @@ struct qm_mcc_ceetm_mapping_shaper_tcfc_config {
 	u8 dcpid;
 	union {
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u8 map_shaped:1;
-			u8 map_reserved:4;
-			u8 map_lni_id:3;
-#else
 			u8 map_lni_id:3;
 			u8 map_reserved:4;
 			u8 map_shaped:1;
-#endif
 			u8 __reserved2[58];
 		} __packed channel_mapping;
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u8 map_reserved:5;
-			u8 map_lni_id:3;
-#else
 			u8 map_lni_id:3;
 			u8 map_reserved:5;
-#endif
 			u8 __reserved2[58];
 		} __packed sp_mapping;
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u8 cpl:1;
-			u8 cpl_reserved:2;
-			u8 oal:5;
-#else
 			u8 oal:5;
 			u8 cpl_reserved:2;
 			u8 cpl:1;
-#endif
 			u32 crtcr:24;
 			u32 ertcr:24;
 			u16 crtbl;
@@ -1081,16 +926,6 @@ struct qm_mcc_ceetm_ccgr_config {
 	u16 we_mask;
 	union {
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u8 ctl_reserved:1;
-			u8 ctl_wr_en_g:1;
-			u8 ctl_wr_en_y:1;
-			u8 ctl_wr_en_r:1;
-			u8 ctl_td_en:1;
-			u8 ctl_td_mode:1;
-			u8 ctl_cscn_en:1;
-			u8 ctl_mode:1;
-#else
 			u8 ctl_mode:1;
 			u8 ctl_cscn_en:1;
 			u8 ctl_td_mode:1;
@@ -1099,7 +934,6 @@ struct qm_mcc_ceetm_ccgr_config {
 			u8 ctl_wr_en_y:1;
 			u8 ctl_wr_en_g:1;
 			u8 ctl_reserved:1;
-#endif
 			u8 cdv;
 			u16 cscn_tupd;
 			u8 oal;
@@ -1278,40 +1112,6 @@ struct qm_mcr_queryfq_np {
 	u8 result;
 	u8 __reserved1;
 	u8 state;	/* QM_MCR_NP_STATE_*** */
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	u8 __reserved2;
-	u32 fqd_link:24;
-	u16 __reserved3:2;
-	u16 odp_seq:14;
-	u16 __reserved4:2;
-	u16 orp_nesn:14;
-	u16 __reserved5:1;
-	u16 orp_ea_hseq:15;
-	u16 __reserved6:1;
-	u16 orp_ea_tseq:15;
-	u8 __reserved7;
-	u32 orp_ea_hptr:24;
-	u8 __reserved8;
-	u32 orp_ea_tptr:24;
-	u8 __reserved9;
-	u32 pfdr_hptr:24;
-	u8 __reserved10;
-	u32 pfdr_tptr:24;
-	u8 __reserved11[5];
-	u8 __reserved12:7;
-	u8 is:1;
-	u16 ics_surp;
-	u32 byte_cnt;
-	u8 __reserved13;
-	u32 frm_cnt:24;
-	u32 __reserved14;
-	u16 ra1_sfdr;	/* QM_MCR_NP_RA1_*** */
-	u16 ra2_sfdr;	/* QM_MCR_NP_RA2_*** */
-	u16 __reserved15;
-	u16 od1_sfdr;	/* QM_MCR_NP_OD1_*** */
-	u16 od2_sfdr;	/* QM_MCR_NP_OD2_*** */
-	u16 od3_sfdr;	/* QM_MCR_NP_OD3_*** */
-#else
 	u8 __reserved2;
 	u32 fqd_link:24;
 
@@ -1353,7 +1153,6 @@ struct qm_mcr_queryfq_np {
 	u16 od1_sfdr;	/* QM_MCR_NP_OD1_*** */
 	u16 od2_sfdr;	/* QM_MCR_NP_OD2_*** */
 	u16 od3_sfdr;	/* QM_MCR_NP_OD3_*** */
-#endif
 } __packed;
 
 
@@ -1394,29 +1193,17 @@ struct qm_mcr_querycgr {
 	u8 __reserved2[3];
 	union {
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u32 __reserved3:24;
-			u32 i_bcnt_hi:8;/* high 8-bits of 40-bit "Instant" */
-			u32 i_bcnt_lo;	/* low 32-bits of 40-bit */
-#else
 			u32 i_bcnt_lo;	/* low 32-bits of 40-bit */
 			u32 i_bcnt_hi:8;/* high 8-bits of 40-bit "Instant" */
 			u32 __reserved3:24;
-#endif
 		};
 		u64 i_bcnt;
 	};
 	union {
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u32 __reserved4:24;
-			u32 a_bcnt_hi:8;/* high 8-bits of 40-bit "Average" */
-			u32 a_bcnt_lo;	/* low 32-bits of 40-bit */
-#else
 			u32 a_bcnt_lo;	/* low 32-bits of 40-bit */
 			u32 a_bcnt_hi:8;/* high 8-bits of 40-bit "Average" */
 			u32 __reserved4:24;
-#endif
 		};
 		u64 a_bcnt;
 	};
@@ -1472,13 +1259,8 @@ struct qm_mcr_querywq {
 	union {
 		u16 channel_wq; /* ignores wq (3 lsbits) */
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u16 id:13; /* qm_channel */
-			u16 __reserved:3;
-#else
 			u16 __reserved:3;
 			u16 id:13; /* qm_channel */
-#endif
 		} __packed channel;
 	};
 	u8 __reserved[28];
@@ -1555,17 +1337,10 @@ struct qm_mcr_ceetm_class_scheduler_query {
 	u8 verb;
 	u8 result;
 	u8 __reserved1[9];
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	u8 gpc_reserved:1;
-	u8 gpc_combine_flag:1;
-	u8 gpc_prio_b:3;
-	u8 gpc_prio_a:3;
-#else
 	u8 gpc_prio_a:3;
 	u8 gpc_prio_b:3;
 	u8 gpc_combine_flag:1;
 	u8 gpc_reserved:1;
-#endif
 	u16 crem;
 	u16 erem;
 	u8 w[8];
@@ -1595,37 +1370,20 @@ struct qm_mcr_ceetm_mapping_shaper_tcfc_query {
 	u8 __reserved1;
 	union {
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u8 map_shaped:1;
-			u8 map_reserved:4;
-			u8 map_lni_id:3;
-#else
 			u8 map_lni_id:3;
 			u8 map_reserved:4;
 			u8 map_shaped:1;
-#endif
 			u8 __reserved2[58];
 		} __packed channel_mapping_query;
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u8 map_reserved:5;
-			u8 map_lni_id:3;
-#else
 			u8 map_lni_id:3;
 			u8 map_reserved:5;
-#endif
 			u8 __reserved2[58];
 		} __packed sp_mapping_query;
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u8 cpl:1;
-			u8 cpl_reserved:2;
-			u8 oal:5;
-#else
 			u8 oal:5;
 			u8 cpl_reserved:2;
 			u8 cpl:1;
-#endif
 			u32 crtcr:24;
 			u32 ertcr:24;
 			u16 crtbl;
@@ -1666,16 +1424,6 @@ struct qm_mcr_ceetm_ccgr_query {
 	u8 __reserved1[6];
 	union {
 		struct {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-			u8 ctl_reserved:1;
-			u8 ctl_wr_en_g:1;
-			u8 ctl_wr_en_y:1;
-			u8 ctl_wr_en_r:1;
-			u8 ctl_td_en:1;
-			u8 ctl_td_mode:1;
-			u8 ctl_cscn_en:1;
-			u8 ctl_mode:1;
-#else
 			u8 ctl_mode:1;
 			u8 ctl_cscn_en:1;
 			u8 ctl_td_mode:1;
@@ -1684,7 +1432,6 @@ struct qm_mcr_ceetm_ccgr_query {
 			u8 ctl_wr_en_y:1;
 			u8 ctl_wr_en_g:1;
 			u8 ctl_reserved:1;
-#endif
 			u8 cdv;
 			u8 __reserved2[2];
 			u8 oal;
@@ -1904,17 +1651,20 @@ enum qman_cb_dqrr_result {
 	 * DCA via EQCR entries. */
 	qman_cb_dqrr_defer,
 	/* Stop processing without consuming this ring entry. Exits the current
-	 * qman_poll_dqrr() or interrupt-handling, as appropriate. If within an
-	 * interrupt handler, the callback would typically call
+	 * qman_p_poll_dqrr() or interrupt-handling, as appropriate. If within
+	 * an interrupt handler, the callback would typically call
 	 * qman_irqsource_remove(QM_PIRQ_DQRI) before returning this value,
 	 * otherwise the interrupt will reassert immediately. */
 	qman_cb_dqrr_stop,
 	/* Like qman_cb_dqrr_stop, but consumes the current entry. */
 	qman_cb_dqrr_consume_stop
 };
+
 typedef enum qman_cb_dqrr_result (*qman_cb_dqrr)(struct qman_portal *qm,
-					struct qman_fq *fq,
-					const struct qm_dqrr_entry *dqrr);
+						 struct qman_fq *fq,
+						 const struct qm_dqrr_entry *dqrr,
+						 bool sched_napi,
+						 struct qman_poll_ctx *ctx);
 
 /* This callback type is used when handling ERNs, FQRNs and FQRLs via MR. They
  * are always consumed after the callback returns. */
@@ -2079,19 +1829,6 @@ struct qman_cgr {
 const struct qman_portal_config *qman_get_portal_config(void);
 
 /**
- * qman_irqsource_get - return the portal work that is interrupt-driven
- *
- * Returns a bitmask of QM_PIRQ_**I processing sources that are currently
- * enabled for interrupt handling on the current cpu's affine portal. These
- * sources will trigger the portal interrupt and the interrupt handler (or a
- * tasklet/bottom-half it defers to) will perform the corresponding processing
- * work. The qman_poll_***() functions will only process sources that are not in
- * this bitmask. If the current CPU is sharing a portal hosted on another CPU,
- * this always returns zero.
- */
-u32 qman_irqsource_get(void);
-
-/**
  * qman_irqsource_add - add processing sources to be interrupt-driven
  * @bits: bitmask of QM_PIRQ_**I processing sources
  *
@@ -2125,6 +1862,15 @@ const cpumask_t *qman_affine_cpus(void);
 u16 qman_affine_channel(unsigned int cpu);
 
 /**
+ * qman_portal_ficid - return the ICID a software portal enqueues frames with
+ * @channel: the portal's channel ID, as qman_affine_channel() returns it
+ *
+ * Returns: the ICID, or a negative errno without CCSR access or for a channel
+ * that is no software portal.
+ */
+int qman_portal_ficid(u16 channel);
+
+/**
  * qman_get_affine_portal - return the portal pointer affine to cpu
  * @cpu: the cpu whose affine portal is the subject of the query
  *
@@ -2132,46 +1878,32 @@ u16 qman_affine_channel(unsigned int cpu);
 void *qman_get_affine_portal(int cpu);
 
 /**
- * qman_poll_dqrr - process DQRR (fast-path) entries
- * @limit: the maximum number of DQRR entries to process
+ * qman_affine_portal_eqcr_fill - commands @cpu's portal ring holds untaken
  *
- * Use of this function requires that DQRR processing not be interrupt-driven.
- * Ie. the value returned by qman_irqsource_get() should not include
- * QM_PIRQ_DQRI. If the current CPU is sharing a portal hosted on another CPU,
- * this function will return -EINVAL, otherwise the return value is >=0 and
- * represents the number of DQRR entries processed.
+ * What the CPU has written into its portal's enqueue ring and QMan has not
+ * consumed yet, for a report of where a frame waits. -ENODEV without a portal.
  */
-int qman_poll_dqrr(unsigned int limit);
+int qman_affine_portal_eqcr_fill(int cpu);
 
 /**
- * qman_poll_slow - process anything (except DQRR) that isn't interrupt-driven.
+ * qman_affine_portal_dqrr_pending - entries @cpu's portal holds unconsumed
  *
- * This function does any portal processing that isn't interrupt-driven. If the
- * current CPU is sharing a portal hosted on another CPU, this function will
- * return (u32)-1, otherwise the return value is a bitmask of QM_PIRQ_* sources
- * indicating what interrupt sources were actually processed by the call.
+ * What the portal has dequeued into its ring and the CPU has not processed,
+ * for a report of where a frame waits. -ENODEV without a portal.
  */
-u32 qman_poll_slow(void);
+int qman_affine_portal_dqrr_pending(int cpu);
 
 /**
- * qman_poll - legacy wrapper for qman_poll_dqrr() and qman_poll_slow()
+ * qman_drain_ern - consume pending enqueue rejection notifications
  *
- * Dispatcher logic on a cpu can use this to trigger any maintenance of the
- * affine portal. There are two classes of portal processing in question;
- * fast-path (which involves demuxing dequeue ring (DQRR) entries and tracking
- * enqueue ring (EQCR) consumption), and slow-path (which involves EQCR
- * thresholds, congestion state changes, etc). This function does whatever
- * processing is not triggered by interrupts.
- *
- * Note, if DQRR and some slow-path processing are poll-driven (rather than
- * interrupt-driven) then this function uses a heuristic to determine how often
- * to run slow-path processing - as slow-path processing introduces at least a
- * minimum latency each time it is run, whereas fast-path (DQRR) processing is
- * close to zero-cost if there is no work to be done. Applications can tune this
- * behaviour themselves by using qman_poll_dqrr() and qman_poll_slow() directly
- * rather than going via this wrapper.
+ * Call on the owning CPU of each affine portal after stopping producers
+ * and draining their enqueue rings, from task context with interrupts
+ * off, not from an IPI: the FQ state-change and ERN callbacks it runs
+ * take spinlock_t, which a never-threaded hard interrupt must not. The
+ * MR must normally be IRQ-driven; concurrent polling of the same portal
+ * is not permitted.
  */
-void qman_poll(void);
+void qman_drain_ern(void);
 
 /**
  * qman_stop_dequeues - Stop h/w dequeuing to the s/w portal
@@ -2429,6 +2161,19 @@ int qman_query_fq_np(struct qman_fq *fq, struct qm_mcr_queryfq_np *np);
  *	to query if query_dedicated is zero.
  */
 int qman_query_wq(u8 query_dedicated, struct qm_mcr_querywq *wq);
+
+/**
+ * qman_query_fq_np_timeout - qman_query_fq_np(), waiting at most @timeout_us
+ * qman_query_wq_timeout - qman_query_wq(), waiting at most @timeout_us
+ *
+ * For a report made because QMan may have stopped answering: -ETIMEDOUT
+ * when this CPU's portal does not answer in time. The portal then owes that
+ * answer, and its next command, of any kind, waits for it first.
+ */
+int qman_query_fq_np_timeout(struct qman_fq *fq, struct qm_mcr_queryfq_np *np,
+			     unsigned int timeout_us);
+int qman_query_wq_timeout(u8 query_dedicated, struct qm_mcr_querywq *wq,
+			  unsigned int timeout_us);
 
 /**
  * qman_volatile_dequeue - Issue a volatile dequeue command
@@ -3618,6 +3363,17 @@ int qman_ceetm_cq_get_dequeue_statistics(struct qm_ceetm_cq *cq, u32 flags,
  */
 int qman_ceetm_drain_cq(struct qm_ceetm_cq *cq);
 
+/**
+ * qman_ceetm_cq_pop - dequeue a frame for software reclamation
+ * @cq: the class queue, with producers stopped
+ * @fd: receives a CPU-endian descriptor when the return value is 1
+ *
+ * Returns 1 for a frame (the caller owns its buffers), 0 for an empty queue,
+ * -EAGAIN while QMan prefetches a descriptor, or another negative error.
+ * Keep queue and buffer ownership context alive until the queue is empty.
+ */
+int qman_ceetm_cq_pop(struct qm_ceetm_cq *cq, struct qm_fd *fd);
+
 	/* ---------------------- */
 	/* CEETM :: logical FQIDs */
 	/* ---------------------- */
@@ -3933,9 +3689,9 @@ const struct qman_portal_config *qman_p_get_portal_config(struct qman_portal
 									 *p);
 int qman_p_irqsource_add(struct qman_portal *p, u32 bits);
 int qman_p_irqsource_remove(struct qman_portal *p, u32 bits);
-int qman_p_poll_dqrr(struct qman_portal *p, unsigned int limit);
+int qman_p_poll_dqrr(struct qman_portal *p, unsigned int limit,
+		     const struct napi_struct *active_napi);
 u32 qman_p_poll_slow(struct qman_portal *p);
-void qman_p_poll(struct qman_portal *p);
 void qman_p_stop_dequeues(struct qman_portal *p);
 void qman_p_start_dequeues(struct qman_portal *p);
 void qman_p_static_dequeue_add(struct qman_portal *p, u32 pools);
@@ -3962,6 +3718,12 @@ static inline int qman_is_probed(void) {
 static inline int qman_portals_probed(void) {
 	return 1;
 }
+
+int qman_ceetm_configure_mapping_shaper_tcfc(
+	struct qm_mcc_ceetm_mapping_shaper_tcfc_config *opts);
+/* Macro used to configure queue for control traffic, 7 is the highest */
+#define QOS_DEFAULT_QUEUE      7
+#define QOS_LEAST_PRIORITY_QUEUE   0
 
 #ifdef __cplusplus
 }

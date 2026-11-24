@@ -30,14 +30,8 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifdef CONFIG_FSL_DPAA_ETH_DEBUG
-#define pr_fmt(fmt) \
-	KBUILD_MODNAME ": %s:%hu:%s() " fmt, \
-	KBUILD_BASENAME".c", __LINE__, __func__
-#else
 #define pr_fmt(fmt) \
 	KBUILD_MODNAME ": " fmt
-#endif
 
 #include <linux/init.h>
 #include <linux/module.h>
@@ -57,6 +51,7 @@
 #include <linux/if_ether.h>	/* ETH_P_IP and ETH_P_IPV6 */
 #include <linux/highmem.h>
 #include <linux/percpu.h>
+#include <linux/srcu.h>
 #include <linux/dma-mapping.h>
 #include <linux/fsl_bman.h>
 #ifdef CONFIG_SOC_BUS
@@ -70,12 +65,6 @@
 #include "mac.h"
 #include "dpaa_eth.h"
 #include "dpaa_eth_common.h"
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-#include "dpaa_debugfs.h"
-#endif /* CONFIG_FSL_DPAA_DBG_LOOP */
-#ifdef CONFIG_FSL_DPAA_CEETM
-#include "dpaa_eth_ceetm.h"
-#endif
 
 /* CREATE_TRACE_POINTS only needs to be defined once. Other dpa files
  * using trace events only need to #include <trace/events/sched.h>
@@ -100,6 +89,13 @@ static uint8_t debug = -1;
 module_param(debug, byte, S_IRUGO);
 MODULE_PARM_DESC(debug, "Module/Driver verbosity level");
 
+/* How many quarters of what a port seeds the pool with its queues to the CPU
+ * may hold (dpaa_eth_priv_ingress_cgr_init()): half by default. */
+static uint ingress_quarters = 2;
+module_param(ingress_quarters, uint, 0444);
+MODULE_PARM_DESC(ingress_quarters,
+		 "Quarters of a port's pool seed its queues to the CPU may hold (1-4)");
+
 /* This has to work in tandem with the DPA_CS_THRESHOLD_xxx values. */
 static uint16_t tx_timeout = 1000;
 module_param(tx_timeout, ushort, S_IRUGO);
@@ -110,14 +106,12 @@ MODULE_PARM_DESC(tx_timeout, "The Tx timeout in ms");
 #define DPAA_ETH_MAX_PAD (L1_CACHE_BYTES * 8)
 
 static uint8_t dpa_priv_common_bpid;
+/* The per-CPU fill of that common pool, counted once for every private port
+ * (dpaa_eth_priv_probe()). Allocated with the first port and kept: private
+ * ports are not removed. */
+static int __percpu *dpa_priv_common_count;
 
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-struct net_device *dpa_loop_netdevs[20];
-#endif
 
-#ifdef CONFIG_FSL_DPAA_CEETM
-extern struct Qdisc_ops ceetm_qdisc_ops;
-#endif
 
 #ifdef CONFIG_PM
 
@@ -269,12 +263,6 @@ static void _dpa_rx_error(struct net_device *net_dev,
 		if (netif_msg_hw(priv) && net_ratelimit())
 			netdev_dbg(net_dev, "Err FD status = 0x%08x\n",
 					fd->status & FM_FD_STAT_RX_ERRORS);
-#ifdef CONFIG_FSL_DPAA_HOOKS
-	if (dpaa_eth_hooks.rx_error &&
-		dpaa_eth_hooks.rx_error(net_dev, fd, fqid) == DPAA_ETH_STOLEN)
-		/* it's up to the hook to perform resource cleanup */
-		return;
-#endif
 	percpu_priv->stats.rx_errors++;
 
 	if (fd->status & FM_PORT_FRM_ERR_DMA)
@@ -300,14 +288,8 @@ static void _dpa_tx_error(struct net_device		*net_dev,
 	struct sk_buff *skb;
 
 	if (netif_msg_hw(priv) && net_ratelimit())
-		netdev_warn(net_dev, "FD status = 0x%08x\n",
+		netdev_warn(net_dev, "  _dpa_tx_error :FD status = 0x%08x\n",
 				fd->status & FM_FD_STAT_TX_ERRORS);
-#ifdef CONFIG_FSL_DPAA_HOOKS
-	if (dpaa_eth_hooks.tx_error &&
-		dpaa_eth_hooks.tx_error(net_dev, fd, fqid) == DPAA_ETH_STOLEN)
-		/* now the hook must ensure proper cleanup */
-		return;
-#endif
 	percpu_priv->stats.tx_errors++;
 
 	/* If we intended the buffers from this frame to go into the bpools
@@ -347,10 +329,16 @@ void __hot _dpa_process_parse_results(const fm_prs_result_t *parse_results,
 				      bool dcl4c_valid)
 {
 	if (dcl4c_valid && fd->status & FM_FD_STAT_L4CV) {
-		/* The parser has run and performed L4 checksum validation.
-		 * We know there were no parser errors (and implicitly no
-		 * L4 csum error), otherwise we wouldn't be here.
+		/* FM_FD_STAT_L4CV only indicates validation was ATTEMPTED.
+		 * We must also verify parse_results->cksum == 0xFFFF to
+		 * confirm the checksum actually PASSED.
 		 */
+		if (parse_results->cksum != DPA_CSUM_VALID) {
+			/* Checksum validation failed - use software checksum */
+			skb->ip_summed = CHECKSUM_NONE;
+			*use_gro = false;
+			return;
+		}
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 		/* Don't go through GRO for certain types of traffic that
@@ -382,11 +370,11 @@ int dpaa_eth_poll(struct napi_struct *napi, int budget)
 	struct dpa_napi_portal *np =
 			container_of(napi, struct dpa_napi_portal, napi);
 
-	int cleaned = qman_p_poll_dqrr(np->p, budget);
+	int cleaned = qman_p_poll_dqrr(np->p, budget, napi);
 
-	if (cleaned < budget) {
+	if (cleaned < budget && napi_complete_done(napi, cleaned)) {
 		int tmp;
-		napi_complete(napi);
+
 		tmp = qman_p_irqsource_add(np->p, QM_PIRQ_DQRI);
 		DPA_BUG_ON(tmp);
 	}
@@ -414,12 +402,6 @@ static void __hot _dpa_tx_conf(struct net_device	*net_dev,
 	}
 
 	/* hopefully we need not get the timestamp before the hook */
-#ifdef CONFIG_FSL_DPAA_HOOKS
-	if (dpaa_eth_hooks.tx_confirm && dpaa_eth_hooks.tx_confirm(net_dev,
-		fd, fqid) == DPAA_ETH_STOLEN)
-		/* it's the hook that must now perform cleanup */
-		return;
-#endif
 	/* This might not perfectly reflect the reality, if the core dequeuing
 	 * the Tx confirmation is different from the one that did the enqueue,
 	 * but at least it'll show up in the total count.
@@ -431,10 +413,11 @@ static void __hot _dpa_tx_conf(struct net_device	*net_dev,
 	dev_kfree_skb(skb);
 }
 
-static enum qman_cb_dqrr_result
-priv_rx_error_dqrr(struct qman_portal		*portal,
-		      struct qman_fq			*fq,
-		      const struct qm_dqrr_entry	*dq)
+static enum qman_cb_dqrr_result priv_rx_error_dqrr(struct qman_portal *portal,
+						   struct qman_fq *fq,
+						   const struct qm_dqrr_entry *dq,
+						   bool sched_napi,
+						   struct qman_poll_ctx *ctx)
 {
 	struct net_device		*net_dev;
 	struct dpa_priv_s		*priv;
@@ -446,11 +429,13 @@ priv_rx_error_dqrr(struct qman_portal		*portal,
 
 	percpu_priv = raw_cpu_ptr(priv->percpu_priv);
 	count_ptr = raw_cpu_ptr(priv->percpu_count);
-
-	if (dpaa_eth_napi_schedule(percpu_priv, portal))
+#ifndef CONFIG_FSL_ASK_QMAN_PORTAL_NAPI
+	if (dpaa_eth_napi_schedule(percpu_priv, portal, sched_napi))
 		return qman_cb_dqrr_stop;
+#endif
 
-	if (unlikely(dpaa_eth_refill_bpools(priv->dpa_bp, count_ptr)))
+	if (unlikely(dpaa_eth_refill_bpools(priv->dpa_bp, count_ptr,
+			CONFIG_FSL_DPAA_ETH_REFILL_THRESHOLD)))
 		/* Unable to refill the buffer pool due to insufficient
 		 * system memory. Just release the frame back into the pool,
 		 * otherwise we'll soon end up with an empty buffer pool.
@@ -463,9 +448,9 @@ priv_rx_error_dqrr(struct qman_portal		*portal,
 }
 
 static enum qman_cb_dqrr_result __hot
-priv_rx_default_dqrr(struct qman_portal		*portal,
-			struct qman_fq			*fq,
-			const struct qm_dqrr_entry	*dq)
+priv_rx_default_dqrr(struct qman_portal *portal, struct qman_fq *fq,
+		     const struct qm_dqrr_entry *dq, bool sched_napi,
+		     struct qman_poll_ctx *ctx)
 {
 	struct net_device		*net_dev;
 	struct dpa_priv_s		*priv;
@@ -477,19 +462,21 @@ priv_rx_default_dqrr(struct qman_portal		*portal,
 	priv = netdev_priv(net_dev);
 	dpa_bp = priv->dpa_bp;
 
-	/* Trace the Rx fd */
-	trace_dpa_rx_fd(net_dev, fq, &dq->fd);
-
 	/* IRQ handler, non-migratable; safe to use raw_cpu_ptr here */
 	percpu_priv = raw_cpu_ptr(priv->percpu_priv);
 	count_ptr = raw_cpu_ptr(priv->percpu_count);
-
-	if (unlikely(dpaa_eth_napi_schedule(percpu_priv, portal)))
+#ifndef CONFIG_FSL_ASK_QMAN_PORTAL_NAPI
+	if (unlikely(dpaa_eth_napi_schedule(percpu_priv, portal, sched_napi)))
 		return qman_cb_dqrr_stop;
+#endif
+
+	/* Trace the Rx fd */
+	trace_dpa_rx_fd(net_dev, fq, &dq->fd);
 
 	/* Vale of plenty: make sure we didn't run out of buffers */
 
-	if (unlikely(dpaa_eth_refill_bpools(dpa_bp, count_ptr)))
+	if (unlikely(dpaa_eth_refill_bpools(dpa_bp, count_ptr,
+			CONFIG_FSL_DPAA_ETH_REFILL_THRESHOLD)))
 		/* Unable to refill the buffer pool due to insufficient
 		 * system memory. Just release the frame back into the pool,
 		 * otherwise we'll soon end up with an empty buffer pool.
@@ -497,15 +484,15 @@ priv_rx_default_dqrr(struct qman_portal		*portal,
 		dpa_fd_release(net_dev, &dq->fd);
 	else
 		_dpa_rx(net_dev, portal, priv, percpu_priv, &dq->fd, fq->fqid,
-			count_ptr);
+			count_ptr, ctx);
 
 	return qman_cb_dqrr_consume;
 }
 
 static enum qman_cb_dqrr_result
-priv_tx_conf_error_dqrr(struct qman_portal		*portal,
-		      struct qman_fq			*fq,
-		      const struct qm_dqrr_entry	*dq)
+priv_tx_conf_error_dqrr(struct qman_portal *portal, struct qman_fq *fq,
+		        const struct qm_dqrr_entry *dq, bool sched_napi,
+		        struct qman_poll_ctx *ctx)
 {
 	struct net_device		*net_dev;
 	struct dpa_priv_s		*priv;
@@ -515,9 +502,10 @@ priv_tx_conf_error_dqrr(struct qman_portal		*portal,
 	priv = netdev_priv(net_dev);
 
 	percpu_priv = raw_cpu_ptr(priv->percpu_priv);
-
-	if (dpaa_eth_napi_schedule(percpu_priv, portal))
+#ifndef CONFIG_FSL_ASK_QMAN_PORTAL_NAPI
+	if (dpaa_eth_napi_schedule(percpu_priv, portal, sched_napi))
 		return qman_cb_dqrr_stop;
+#endif
 
 	_dpa_tx_error(net_dev, priv, percpu_priv, &dq->fd, fq->fqid);
 
@@ -525,9 +513,9 @@ priv_tx_conf_error_dqrr(struct qman_portal		*portal,
 }
 
 static enum qman_cb_dqrr_result __hot
-priv_tx_conf_default_dqrr(struct qman_portal		*portal,
-			struct qman_fq			*fq,
-			const struct qm_dqrr_entry	*dq)
+priv_tx_conf_default_dqrr(struct qman_portal *portal, struct qman_fq *fq,
+			  const struct qm_dqrr_entry *dq, bool sched_napi,
+			  struct qman_poll_ctx *ctx)
 {
 	struct net_device		*net_dev;
 	struct dpa_priv_s		*priv;
@@ -536,14 +524,15 @@ priv_tx_conf_default_dqrr(struct qman_portal		*portal,
 	net_dev = ((struct dpa_fq *)fq)->net_dev;
 	priv = netdev_priv(net_dev);
 
-	/* Trace the fd */
-	trace_dpa_tx_conf_fd(net_dev, fq, &dq->fd);
-
 	/* Non-migratable context, safe to use raw_cpu_ptr */
 	percpu_priv = raw_cpu_ptr(priv->percpu_priv);
-
-	if (dpaa_eth_napi_schedule(percpu_priv, portal))
+#ifndef CONFIG_FSL_ASK_QMAN_PORTAL_NAPI
+	if (dpaa_eth_napi_schedule(percpu_priv, portal, sched_napi))
 		return qman_cb_dqrr_stop;
+#endif
+
+	/* Trace the fd */
+	trace_dpa_tx_conf_fd(net_dev, fq, &dq->fd);
 
 	_dpa_tx_conf(net_dev, priv, percpu_priv, &dq->fd, fq->fqid);
 
@@ -593,26 +582,24 @@ EXPORT_SYMBOL(private_fq_cbs);
 static void dpaa_eth_napi_enable(struct dpa_priv_s *priv)
 {
 	struct dpa_percpu_priv_s *percpu_priv;
-	int i, j;
+	int i;
 
 	for_each_possible_cpu(i) {
 		percpu_priv = per_cpu_ptr(priv->percpu_priv, i);
 
-		for (j = 0; j < qman_portal_max; j++)
-			napi_enable(&percpu_priv->np[j].napi);
+		napi_enable(&percpu_priv->np.napi);
 	}
 }
 
 static void dpaa_eth_napi_disable(struct dpa_priv_s *priv)
 {
 	struct dpa_percpu_priv_s *percpu_priv;
-	int i, j;
+	int i;
 
 	for_each_possible_cpu(i) {
 		percpu_priv = per_cpu_ptr(priv->percpu_priv, i);
 
-		for (j = 0; j < qman_portal_max; j++)
-			napi_disable(&percpu_priv->np[j].napi);
+		napi_disable(&percpu_priv->np.napi);
 	}
 }
 
@@ -653,23 +640,223 @@ static int __cold dpa_eth_priv_stop(struct net_device *net_dev)
 	return _errno;
 }
 
+/* The tags a full-size frame on the port may carry: none while nothing is
+ * stacked on it, one once anything is -- a VLAN, a bridge forwarding tagged
+ * frames through, a bond, a macvlan -- and two once a VLAN on the port is an
+ * 802.1ad service VLAN or carries a VLAN of its own: a VLAN device above it,
+ * or a bridge it is a port of, which tags the frames it forwards there or
+ * carries tagged ones through.
+ */
+static int dpa_upper_tags(struct net_device *net_dev)
+{
+	struct net_device *upper, *inner;
+	struct list_head *iter, *inner_iter;
+	int tags = 0;
+
+	rcu_read_lock();
+	netdev_for_each_upper_dev_rcu(net_dev, upper, iter) {
+		tags = max(tags, 1);
+		if (!is_vlan_dev(upper))
+			continue;
+		if (vlan_dev_vlan_proto(upper) == htons(ETH_P_8021AD))
+			tags = 2;
+		netdev_for_each_upper_dev_rcu(upper, inner, inner_iter)
+			if (is_vlan_dev(inner) || netif_is_bridge_master(inner))
+				tags = 2;
+	}
+	rcu_read_unlock();
+	return tags;
+}
+
+/* The mEMAC holds every received frame, FCS included, to its max frame length
+ * and makes no allowance of its own for a VLAN tag. Size the limit to what the
+ * port may carry at @mtu, with the tags dpa_upper_tags() allows for. Never
+ * below a standard frame, never above the FMan-wide maximum the ports are
+ * sized for.
+ *
+ * RTNL serializes every caller, so the limit follows the latest MTU and upper
+ * set.
+ */
+static int dpa_set_mac_max_frame(struct net_device *net_dev, int mtu)
+{
+	struct dpa_priv_s *priv = netdev_priv(net_dev);
+	struct mac_device *mac_dev = priv->mac_dev;
+	int len;
+
+	ASSERT_RTNL();
+
+	if (!mac_dev->set_max_frame)
+		return 0;
+
+	len = max(mtu, ETH_DATA_LEN) + ETH_HLEN + ETH_FCS_LEN +
+	      dpa_upper_tags(net_dev) * VLAN_HLEN;
+	len = min(len, dpa_get_max_frm());
+
+	return mac_dev->set_max_frame(mac_dev->get_mac_handle(mac_dev), len);
+}
+
+static int dpa_change_mtu(struct net_device *net_dev, int new_mtu)
+{
+	int err;
+
+	err = dpa_set_mac_max_frame(net_dev, new_mtu);
+	if (err)
+		return err;
+
+	WRITE_ONCE(net_dev->mtu, new_mtu);
+	return 0;
+}
+
 #ifdef CONFIG_NET_POLL_CONTROLLER
 static void dpaa_eth_poll_controller(struct net_device *net_dev)
 {
 	struct dpa_priv_s *priv = netdev_priv(net_dev);
 	struct dpa_percpu_priv_s *percpu_priv =
 		raw_cpu_ptr(priv->percpu_priv);
-	struct qman_portal *p;
-	const struct qman_portal_config *pc;
 	struct dpa_napi_portal *np;
+	struct napi_struct *napi;
 
-	p = (struct qman_portal *)qman_get_affine_portal(smp_processor_id());
-	pc = qman_p_get_portal_config(p);
-	np = &percpu_priv->np[pc->index];
+	np = &percpu_priv->np;
+	napi = &np->napi;
 
 	qman_p_irqsource_remove(np->p, QM_PIRQ_DQRI);
-	qman_p_poll_dqrr(np->p, np->napi.weight);
+	qman_p_poll_dqrr(np->p, napi->weight, napi);
 	qman_p_irqsource_add(np->p, QM_PIRQ_DQRI);
+}
+#endif
+
+#ifdef CONFIG_CPE_FAST_PATH
+/* Set by the offload module; a built-in driver cannot link against one. The
+ * handler sleeps, so its calls are counted by an SRCU domain rather than by
+ * RCU: the unregister waits for the ones already inside it. */
+static dpa_setup_tc_handler dpa_setup_tc_func;
+DEFINE_STATIC_SRCU(dpa_setup_tc_srcu);
+
+int dpa_register_setup_tc(dpa_setup_tc_handler handler)
+{
+	if (!handler)
+		return -EINVAL;
+	if (cmpxchg(&dpa_setup_tc_func, NULL, handler))
+		return -EBUSY;
+	return 0;
+}
+EXPORT_SYMBOL(dpa_register_setup_tc);
+
+/* Returns once no call is inside the handler, so the module's text -- and
+ * the state the handler reaches, its own SRCU domains among it -- may be freed
+ * after. Must not be called from inside the handler, nor with anything held
+ * that a handler call waits for. */
+void dpa_unregister_setup_tc(void)
+{
+	WRITE_ONCE(dpa_setup_tc_func, NULL);
+	synchronize_srcu(&dpa_setup_tc_srcu);
+}
+EXPORT_SYMBOL(dpa_unregister_setup_tc);
+
+/* Read the handler once, inside the read-side section the unregister waits
+ * for: an unregister can NULL it concurrently, and a call that began before
+ * it must finish before the module's text goes.
+ *
+ * Refusing when nothing is registered is deliberate rather than convenient.
+ * Netfilter has already chosen this route over the module's indirect
+ * registration by the time it gets here, so answering anything but an error
+ * would claim a binding no one is going to service.
+ */
+static int dpa_setup_tc(struct net_device *dev, enum tc_setup_type type,
+			void *type_data)
+{
+	dpa_setup_tc_handler handler;
+	int idx, rc;
+
+	idx = srcu_read_lock(&dpa_setup_tc_srcu);
+	handler = READ_ONCE(dpa_setup_tc_func);
+	rc = handler ? handler(dev, type, type_data) : -EOPNOTSUPP;
+	srcu_read_unlock(&dpa_setup_tc_srcu, idx);
+	return rc;
+}
+
+/* The data-path half, published and retired as one pointer so a frame never
+ * sees one callback without the other. */
+static const struct dpa_qdisc_ops *dpa_qdisc;
+
+int dpa_register_qdisc_ops(const struct dpa_qdisc_ops *ops)
+{
+	if (!ops || !ops->select_queue || !ops->txq_fq || !ops->class_stats)
+		return -EINVAL;
+	/* release-publish so a frame cannot see the pointer before the queue
+	 * map it walks is initialized */
+	if (cmpxchg_release(&dpa_qdisc, NULL, ops))
+		return -EBUSY;
+	return 0;
+}
+EXPORT_SYMBOL(dpa_register_qdisc_ops);
+
+/* Waits for a grace period before returning, so the callbacks' module text
+ * may be freed once it does. Every caller below takes its own rcu_read_lock()
+ * around the pointer and the call, so that holds whatever context it was
+ * entered from. */
+void dpa_unregister_qdisc_ops(void)
+{
+	WRITE_ONCE(dpa_qdisc, NULL);
+	synchronize_net();
+}
+EXPORT_SYMBOL(dpa_unregister_qdisc_ops);
+
+/* The frame queue answered is used for the enqueue after this returns, which
+ * cpe_fp_tx() keeps inside its own read-side section. */
+struct qman_fq *dpa_qdisc_txq_fq(void *qm_ctx, u16 txq, struct sk_buff *skb)
+{
+	const struct dpa_qdisc_ops *ops;
+	struct qman_fq *fq = NULL;
+
+	rcu_read_lock();
+	ops = READ_ONCE(dpa_qdisc);
+	if (ops)
+		fq = ops->txq_fq(qm_ctx, txq, skb);
+	rcu_read_unlock();
+	return fq;
+}
+
+/* Always answers, so the count of statistics this driver reports is a
+ * compile-time constant rather than something that changes when a module
+ * loads. Unclaimed leaf slots, and every value when nothing is registered,
+ * read zero. */
+void dpa_qdisc_class_stats(void *qm_ctx, u64 *data)
+{
+	const struct dpa_qdisc_ops *ops;
+
+	memset(data, 0, (DPAA_ETH_CEETM_LEAF_QUEUES + DPA_CEETM_IMPLICIT_QUEUES) *
+			DPA_CEETM_CLASS_STATS * sizeof(*data));
+	rcu_read_lock();
+	ops = READ_ONCE(dpa_qdisc);
+	if (ops && qm_ctx)
+		ops->class_stats(qm_ctx, data);
+	rcu_read_unlock();
+}
+
+/* Not always entered with a read-side section held: AF_PACKET's qdisc bypass
+ * calls ndo_select_queue from plain process context, which under PREEMPT_RCU
+ * is no reader at all. So the section is taken here. */
+static u16 dpa_qdisc_select_queue(struct net_device *dev, struct sk_buff *skb,
+				  struct net_device *sb_dev)
+{
+	const struct dpa_qdisc_ops *ops;
+	u16 queue = DPA_SELECT_QUEUE_NONE;
+
+	rcu_read_lock();
+	ops = READ_ONCE(dpa_qdisc);
+	if (ops)
+		queue = ops->select_queue(dev, skb);
+	rcu_read_unlock();
+	if (queue != DPA_SELECT_QUEUE_NONE)
+		return queue;
+	/* Traffic that named no class keeps the stack's own choice -- socket
+	 * affinity and XPS included -- folded back into the queues that carry
+	 * it. The fold is what keeps it off the leaf classes above them, which
+	 * real_num_tx_queues now covers and which are reached only by naming
+	 * one; DPAA_ETH_TX_QUEUES is a power of two for exactly this kind of
+	 * masking. */
+	return netdev_pick_tx(dev, skb, sb_dev) & (DPAA_ETH_TX_QUEUES - 1);
 }
 #endif
 
@@ -681,39 +868,41 @@ static const struct net_device_ops dpa_private_ops = {
 	.ndo_get_stats64 = dpa_get_stats64,
 	.ndo_set_mac_address = dpa_set_mac_address,
 	.ndo_validate_addr = eth_validate_addr,
-#ifdef CONFIG_FMAN_PFC
-	.ndo_select_queue = dpa_select_queue,
+#ifdef CONFIG_CPE_FAST_PATH
+	/* Load-bearing beyond the qdisc: the leaf-class queues live above
+	 * real_num_tx_queues' probe-time value, and once one is in service the
+	 * stack's own hash would otherwise spread ordinary traffic across it. */
+	.ndo_select_queue = dpa_qdisc_select_queue,
 #endif
 	.ndo_set_rx_mode = dpa_set_rx_mode,
 	.ndo_init = dpa_ndo_init,
 	.ndo_eth_ioctl = dpa_ioctl,
+	.ndo_change_mtu = dpa_change_mtu,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller = dpaa_eth_poll_controller,
 #endif
 	.ndo_set_features = dpa_set_features,
+	.ndo_fix_features = dpa_fix_features,
+#ifdef CONFIG_CPE_FAST_PATH
+	.ndo_setup_tc = dpa_setup_tc,
+#endif
 };
 
 static int dpa_private_napi_add(struct net_device *net_dev)
 {
 	struct dpa_priv_s *priv = netdev_priv(net_dev);
 	struct dpa_percpu_priv_s *percpu_priv;
-	int i, cpu;
+	int cpu;
 
 	for_each_possible_cpu(cpu) {
 		percpu_priv = per_cpu_ptr(priv->percpu_priv, cpu);
 
-		percpu_priv->np = devm_kzalloc(net_dev->dev.parent,
-			qman_portal_max * sizeof(struct dpa_napi_portal),
-			GFP_KERNEL);
-
-		if (unlikely(percpu_priv->np == NULL)) {
-			dev_err(net_dev->dev.parent, "devm_kzalloc() failed\n");
-			return -ENOMEM;
-		}
-
-		for (i = 0; i < qman_portal_max; i++)
-			netif_napi_add(net_dev, &percpu_priv->np[i].napi,
-					dpaa_eth_poll);
+		/* It drains this CPU's portal, which only this CPU's poll may
+		 * do, with DQRI masked: never from a busy-polling socket's task.
+		 * Out of the NAPI hash, as netif_napi_add_tx() keeps a NAPI, so
+		 * GRO has no id of its to stamp either. */
+		set_bit(NAPI_STATE_NO_BUSY_POLL, &percpu_priv->np.napi.state);
+		netif_napi_add(net_dev, &percpu_priv->np.napi, dpaa_eth_poll);
 	}
 
 	return 0;
@@ -723,20 +912,34 @@ void dpa_private_napi_del(struct net_device *net_dev)
 {
 	struct dpa_priv_s *priv = netdev_priv(net_dev);
 	struct dpa_percpu_priv_s *percpu_priv;
-	int i, cpu;
+	int cpu;
 
 	for_each_possible_cpu(cpu) {
 		percpu_priv = per_cpu_ptr(priv->percpu_priv, cpu);
 
-		if (percpu_priv->np) {
-			for (i = 0; i < qman_portal_max; i++)
-				netif_napi_del(&percpu_priv->np[i].napi);
-
-			devm_kfree(net_dev->dev.parent, percpu_priv->np);
-		}
+		netif_napi_del(&percpu_priv->np.napi);
 	}
 }
 EXPORT_SYMBOL(dpa_private_napi_del);
+
+/* Without the jumbo buffer layout an Rx buffer is sized for one standard
+ * frame, yet fsl_fm_max_frm may raise the FMan-wide maximum far past it. Cap
+ * the MTU at what one buffer holds behind its headroom, a VLAN tag and the
+ * forwarded FCS included, so a frame the MAC accepts lands in one piece. The
+ * standard MTU stays available whatever the layout.
+ */
+static int dpa_priv_max_mtu(const struct dpa_priv_s *priv)
+{
+	int max_mtu = dpa_get_max_mtu();
+#ifndef CONFIG_FSL_DPAA_ETH_JUMBO_FRAME
+	int buf_mtu = (int)priv->dpa_bp->size - priv->rx_headroom -
+		      (VLAN_ETH_HLEN + ETH_FCS_LEN);
+
+	max_mtu = min(max_mtu, max(buf_mtu, ETH_DATA_LEN));
+#endif
+
+	return max_mtu;
+}
 
 static int dpa_private_netdev_init(struct net_device *net_dev)
 {
@@ -761,11 +964,20 @@ static int dpa_private_netdev_init(struct net_device *net_dev)
 
 	/* Configure the maximum MTU according to the FMan's MAXFRM */
 	net_dev->min_mtu = ETH_MIN_MTU;
-	net_dev->max_mtu = dpa_get_max_mtu();
+	net_dev->max_mtu = dpa_priv_max_mtu(priv);
 
 	net_dev->hw_features |= NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM |
 				NETIF_F_RXCSUM;
 	net_dev->lltx               = true;
+
+#ifdef CONFIG_CPE_FAST_PATH
+	/* tc_can_offload() gates every hardware qdisc on this bit, and it has
+	 * to be in features rather than only in hw_features to be on by
+	 * default. Offered alongside ndo_setup_tc, since neither is any use
+	 * without the other. */
+	net_dev->hw_features |= NETIF_F_HW_TC;
+	net_dev->features |= NETIF_F_HW_TC;
+#endif
 
 	/* Advertise S/G and HIGHDMA support for private interfaces */
 	net_dev->hw_features |= NETIF_F_SG | NETIF_F_HIGHDMA;
@@ -799,28 +1011,21 @@ dpa_priv_bp_probe(struct device *dev)
 	return dpa_bp;
 }
 
-/* Place all ingress FQs (Rx Default, Rx Error, PCD FQs) in a dedicated CGR.
- * We won't be sending congestion notifications to FMan; for now, we just use
- * this CGR to generate enqueue rejections to FMan in order to drop the frames
- * before they reach our ingress queues and eat up memory.
- */
-static int dpaa_eth_priv_ingress_cgr_init(struct dpa_priv_s *priv)
+static int dpaa_eth_priv_ingress_cgr_init(struct qman_cgr *cgr, u64 cs_th)
 {
 	struct qm_mcc_initcgr initcgr;
-	u32 cs_th;
 	int err;
 
-	err = qman_alloc_cgrid(&priv->ingress_cgr.cgrid);
+	err = qman_alloc_cgrid(&cgr->cgrid);
 	if (err < 0) {
 		pr_err("Error %d allocating CGR ID\n", err);
-		goto out_error;
+		return err;
 	}
 
-	/* Enable CS TD, but disable Congestion State Change Notifications. */
 	memset(&initcgr, 0, sizeof(initcgr));
-	initcgr.we_mask = QM_CGR_WE_CS_THRES;
-	initcgr.cgr.cscn_en = QM_CGR_EN;
-	cs_th = CONFIG_FSL_DPAA_INGRESS_CS_THRESHOLD;
+	initcgr.we_mask = QM_CGR_WE_MODE | QM_CGR_WE_CS_THRES | QM_CGR_WE_CSCN_EN;
+	initcgr.cgr.mode = QMAN_CGR_MODE_FRAME;
+	initcgr.cgr.cscn_en = 0;
 	qm_cgr_cs_thres_set64(&initcgr.cgr.cs_thres, cs_th, 1);
 
 	initcgr.we_mask |= QM_CGR_WE_CSTD_EN;
@@ -829,16 +1034,60 @@ static int dpaa_eth_priv_ingress_cgr_init(struct dpa_priv_s *priv)
 	/* This is actually a hack, because this CGR will be associated with
 	 * our affine SWP. However, we'll place our ingress FQs in it.
 	 */
-	err = qman_create_cgr(&priv->ingress_cgr, QMAN_CGR_FLAG_USE_INIT,
-		&initcgr);
+	err = qman_create_cgr(cgr, QMAN_CGR_FLAG_USE_INIT, &initcgr);
 	if (err < 0) {
 		pr_err("Error %d creating ingress CGR with ID %d\n", err,
-			priv->ingress_cgr.cgrid);
-		qman_release_cgrid(priv->ingress_cgr.cgrid);
-		goto out_error;
+			cgr->cgrid);
+		qman_release_cgrid(cgr->cgrid);
+		return err;
 	}
-	pr_debug("Created ingress CGR %d for netdev with hwaddr %pM\n",
-		 priv->ingress_cgr.cgrid, priv->mac_dev->addr);
+
+	return 0;
+}
+
+/* Place all ingress FQs (Rx Default, Rx Error, PCD FQs) in a dedicated CGR,
+ * and the high priority PCD FQs in one of their own, each of which refuses
+ * FMan's enqueue past its threshold, so FMan drops the frame.
+ *
+ * A frame waiting on these queues for the CPU holds a buffer of the pool
+ * every port receives into, and only the CPU taking it puts one back
+ * (dpaa_eth_refill_bpools()). The group counted bytes, up to 256 MB, so a
+ * flood the CPU could not keep up with -- traffic for the gateway itself, or
+ * for a flow not yet in hardware -- held the whole pool, and every port missed
+ * whatever it received, forwarding in hardware included. So it counts frames,
+ * at half of what this port seeds the pool with (ingress_quarters): a port's
+ * queues to the CPU then never hold more than half its own share, and a flood
+ * of one port leaves the others theirs. A quarter was measured too tight for
+ * the CPU's own forwarding -- some one frame in a hundred refused while 16,384
+ * connections were admitted at a measured pace, where half refused none -- and
+ * a whole share lost no less of a mass re-admission in hardware while leaving
+ * the pool less to receive into. The high priority group gets the same bound,
+ * so its traffic is never refused for the other's backlog. Nothing consumes
+ * congestion state changes, so none are raised.
+ */
+static int dpaa_eth_priv_ingress_cgrs_init(struct dpa_priv_s *priv)
+{
+	/* What this port seeds the pool with, not the pool's running total
+	 * (config_count), which every port probed after the first raises by
+	 * its own seed: bounded by that, the bound grew with probe order. */
+	u64 cs_th = max_t(u64, (u64)CONFIG_FSL_DPAA_ETH_MAX_BUF_COUNT *
+			       num_possible_cpus() *
+			       clamp_t(uint, ingress_quarters, 1, 4) / 4, 1);
+	int ret;
+
+	ret = dpaa_eth_priv_ingress_cgr_init(&priv->ingress_cgr, cs_th);
+	if (ret)
+		return ret;
+
+	ret = dpaa_eth_priv_ingress_cgr_init(&priv->ingress_cgr_hi_prio, cs_th);
+	if (ret) {
+		dpa_destroy_cgr(&priv->ingress_cgr);
+		return ret;
+	}
+
+	pr_debug("Created ingress CGR %d and hi prio CGR %d for netdev with hwaddr %pM\n",
+		 priv->ingress_cgr.cgrid, priv->ingress_cgr_hi_prio.cgrid,
+		 priv->mac_dev->addr);
 
 	/* struct qman_cgr allows special cgrid values (i.e. outside the 0..255
 	 * range), but we have no common initialization path between the
@@ -847,8 +1096,7 @@ static int dpaa_eth_priv_ingress_cgr_init(struct dpa_priv_s *priv)
 	 */
 	priv->use_ingress_cgr = true;
 
-out_error:
-	return err;
+	return 0;
 }
 
 static int dpa_priv_bp_create(struct net_device *net_dev, struct dpa_bp *dpa_bp,
@@ -892,20 +1140,13 @@ static void dpa_priv_bp_seed(struct net_device *net_dev)
 		 */
 		int *count_ptr = per_cpu_ptr(priv->percpu_count, i);
 
-		dpaa_eth_refill_bpools(dpa_bp, count_ptr);
+		dpaa_eth_refill_bpools(dpa_bp, count_ptr,
+			CONFIG_FSL_DPAA_ETH_REFILL_THRESHOLD);
 	}
 }
 
 static const struct of_device_id dpa_match[];
 
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-static int dpa_new_loop_id(void)
-{
-	static int if_id;
-
-	return if_id++;
-}
-#endif
 
 static int
 dpaa_eth_priv_probe(struct platform_device *_of_dev)
@@ -931,6 +1172,11 @@ dpaa_eth_priv_probe(struct platform_device *_of_dev)
 
 	/* Get the buffer pools assigned to this interface;
 	 * run only once the default pool probing code
+	 *
+	 * The pool's record is the first port's device memory, which every
+	 * later port borrows: unbinding that port by hand would leave the
+	 * others' record, and the pool watch's, dangling. Private ports are
+	 * never removed.
 	 */
 	dpa_bp = (dpa_bpid2pool(dpa_priv_common_bpid)) ? :
 			dpa_priv_bp_probe(dev);
@@ -940,10 +1186,24 @@ dpaa_eth_priv_probe(struct platform_device *_of_dev)
 	/* Allocate this early, so we can store relevant information in
 	 * the private area (needed by 1588 code in dpa_mac_probe)
 	 */
-	net_dev = alloc_etherdev_mq(sizeof(*priv), DPAA_ETH_TX_QUEUES);
+	/* Allocate the leaf-class headroom up front, the way every other
+	 * hardware-qdisc driver does: sch_htb turns the qid a driver hands back
+	 * straight into netdev_get_tx_queue() with no bounds check, so those
+	 * slots have to exist before a class can name one. Only the direct
+	 * queues are live until then; see the real_num_tx_queues call below. */
+	net_dev = alloc_etherdev_mq(sizeof(*priv), DPAA_ETH_TX_QUEUES_MAX);
 	if (!net_dev) {
 		dev_err(dev, "alloc_etherdev_mq() failed\n");
 		goto alloc_etherdev_mq_failed;
+	}
+	/* alloc_etherdev_mq() reports every allocated queue as usable. Narrow
+	 * that to the queues that actually have an egress FQ behind them, so
+	 * ordinary traffic never hashes into the reserved range and a later
+	 * qdisc sees an honest count of pre-existing direct queues. */
+	err = netif_set_real_num_tx_queues(net_dev, DPAA_ETH_TX_QUEUES);
+	if (err) {
+		dev_err(dev, "netif_set_real_num_tx_queues() = %d\n", err);
+		goto netif_set_real_num_tx_queues_failed;
 	}
 
 	/* Do this here, so we can be verbose early */
@@ -956,11 +1216,6 @@ dpaa_eth_priv_probe(struct platform_device *_of_dev)
 
 	priv->msg_enable = netif_msg_init(debug, -1);
 
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-	priv->loop_id = dpa_new_loop_id();
-	priv->loop_to = -1; /* disabled by default */
-	dpa_loop_netdevs[priv->loop_id] = net_dev;
-#endif
 
 	mac_dev = dpa_mac_probe(_of_dev);
 	if (IS_ERR(mac_dev) || !mac_dev) {
@@ -986,10 +1241,10 @@ dpaa_eth_priv_probe(struct platform_device *_of_dev)
 	dpa_bp->size = dpa_bp_size(&buf_layout[RX]);
 
 #ifdef CONFIG_FSL_DPAA_ETH_JUMBO_FRAME
-	/* We only want to use jumbo frame optimization if we actually have
-	 * L2 MAX FRM set for jumbo frames as well.
+	/* The jumbo buffer layout is only of use when the L2 maximum frame
+	 * size admits jumbo frames as well.
 	 */
-	if(fm_get_max_frm() < 9600)
+	if (fm_get_max_frm() < 9600)
 		dev_warn(dev,
 			"Invalid configuration: if jumbo frames support is on, FSL_FM_MAX_FRAME_SIZE should be set to 9600\n");
 #endif
@@ -1005,9 +1260,9 @@ dpaa_eth_priv_probe(struct platform_device *_of_dev)
 
 	if (err < 0)
 		goto fq_probe_failed;
-
 	/* bp init */
-
+	pr_debug("%s: bpid %d, count %d\n", __func__,
+			dpa_bp->bpid, dpa_bp->config_count);
 	err = dpa_priv_bp_create(net_dev, dpa_bp, count);
 
 	if (err < 0)
@@ -1037,7 +1292,7 @@ dpaa_eth_priv_probe(struct platform_device *_of_dev)
 		dev_err(dev, "Error initializing CGR\n");
 		goto tx_cgr_init_failed;
 	}
-	err = dpaa_eth_priv_ingress_cgr_init(priv);
+	err = dpaa_eth_priv_ingress_cgrs_init(priv);
 	if (err < 0) {
 		dev_err(dev, "Error initializing ingress CGR\n");
 		goto rx_cgr_init_failed;
@@ -1056,16 +1311,6 @@ dpaa_eth_priv_probe(struct platform_device *_of_dev)
 	dpaa_eth_init_ports(mac_dev, dpa_bp, count, &port_fqs,
 			buf_layout, dev);
 
-#ifdef CONFIG_FMAN_PFC
-	for (i = 0; i < CONFIG_FMAN_PFC_COS_COUNT; i++) {
-		err = fm_port_set_pfc_priorities_mapping_to_qman_wq(
-				mac_dev->port_dev[TX], i, i);
-		if (unlikely(err != 0)) {
-			dev_err(dev, "Error maping PFC %u to WQ %u\n", i, i);
-			goto pfc_mapping_failed;
-		}
-	}
-#endif
 
 	priv->percpu_priv = devm_alloc_percpu(dev, *priv->percpu_priv);
 
@@ -1080,17 +1325,24 @@ dpaa_eth_priv_probe(struct platform_device *_of_dev)
 		memset(percpu_priv, 0, sizeof(*percpu_priv));
 	}
 
-	priv->percpu_count = devm_alloc_percpu(dev, *priv->percpu_count);
-	if (!priv->percpu_count) {
-		dev_err(dev, "devm_alloc_percpu() failed\n");
-		err = -ENOMEM;
-		goto alloc_percpu_failed;
+	/* Every private port receives into the one common pool, so its fill is
+	 * counted once. Counted per port, a frame received on one port and
+	 * sent out of another found the sender's count already full and was
+	 * confirmed and freed, while the receiver refilled with new buffers --
+	 * an allocation and a free per forwarded frame. Each port still adds
+	 * its own share to what the pool is kept at, so the pool holds what
+	 * it did. */
+	if (!dpa_priv_common_count) {
+		dpa_priv_common_count = alloc_percpu(int);
+		if (!dpa_priv_common_count) {
+			dev_err(dev, "alloc_percpu() failed\n");
+			err = -ENOMEM;
+			goto alloc_percpu_failed;
+		}
+	} else {
+		dpa_bp->config_count += CONFIG_FSL_DPAA_ETH_MAX_BUF_COUNT;
 	}
-
-	for_each_possible_cpu(i) {
-		int *percpu_count = per_cpu_ptr(priv->percpu_count, i);
-		*percpu_count = 0;
-	}
+	priv->percpu_count = dpa_priv_common_count;
 
 	/* Initialize NAPI */
 	err = dpa_private_napi_add(net_dev);
@@ -1111,6 +1363,11 @@ dpaa_eth_priv_probe(struct platform_device *_of_dev)
 	device_set_wakeup_capable(dev, true);
 #endif
 
+	priv->ifinfo = NULL;
+
+	/* Watched from here, as it receives into the shared pool. */
+	dpa_pool_watch_add(priv);
+
 	pr_info("fsl_dpa: Probed interface %s\n", net_dev->name);
 
 	return 0;
@@ -1119,16 +1376,12 @@ netdev_init_failed:
 napi_add_failed:
 	dpa_private_napi_del(net_dev);
 alloc_percpu_failed:
-#ifdef CONFIG_FMAN_PFC
-pfc_mapping_failed:
-#endif
 	dpa_fq_free(dev, &priv->dpa_fq_list);
 fq_alloc_failed:
-	qman_delete_cgr_safe(&priv->ingress_cgr);
-	qman_release_cgrid(priv->ingress_cgr.cgrid);
+	dpa_destroy_cgr(&priv->ingress_cgr);
+	dpa_destroy_cgr(&priv->ingress_cgr_hi_prio);
 rx_cgr_init_failed:
-	qman_delete_cgr_safe(&priv->cgr_data.cgr);
-	qman_release_cgrid(priv->cgr_data.cgr.cgrid);
+	dpa_destroy_cgr(&priv->cgr_data.cgr);
 tx_cgr_init_failed:
 get_channel_failed:
 	dpa_bp_free(priv);
@@ -1137,12 +1390,24 @@ fq_probe_failed:
 alloc_failed:
 mac_probe_failed:
 	dev_set_drvdata(dev, NULL);
+	/* Reached before drvdata is set, so it has nothing to undo. */
+netif_set_real_num_tx_queues_failed:
 	free_netdev(net_dev);
 alloc_etherdev_mq_failed:
 	if (atomic_read(&dpa_bp->refs) == 0)
 		devm_kfree(dev, dpa_bp);
 
 	return err;
+}
+
+/* Off the pool's watch first: dpa_remove() takes down the port's congestion
+ * groups and its hold on the pool, which the watch reads through it. */
+static void __cold dpaa_eth_priv_remove(struct platform_device *of_dev)
+{
+	struct net_device *net_dev = dev_get_drvdata(&of_dev->dev);
+
+	dpa_pool_watch_del(netdev_priv(net_dev));
+	dpa_remove(of_dev);
 }
 
 static const struct of_device_id dpa_match[] = {
@@ -1161,7 +1426,44 @@ static struct platform_driver dpa_driver = {
 		.pm		= DPAA_PM_OPS,
 	},
 	.probe		= dpaa_eth_priv_probe,
-	.remove		= dpa_remove
+	.remove		= dpaa_eth_priv_remove
+};
+
+/* A port's max frame length depends on its uppers as well as its MTU, so
+ * follow uppers being linked and unlinked, on the port and on a VLAN over it
+ * (a VLAN stacked on that VLAN adds a tag). Registration applies the first
+ * per-port limit: the MAC was initialized with the FMan-wide maximum, and a
+ * port left there would take frames its MTU says it cannot, so a failure
+ * fails the registration.
+ */
+static int dpa_netdev_event(struct notifier_block *nb, unsigned long event,
+			    void *ptr)
+{
+	struct net_device *net_dev = netdev_notifier_info_to_dev(ptr);
+	int err;
+
+	if (event == NETDEV_CHANGEUPPER && is_vlan_dev(net_dev))
+		net_dev = vlan_dev_real_dev(net_dev);
+	if (net_dev->netdev_ops != &dpa_private_ops)
+		return NOTIFY_DONE;
+
+	switch (event) {
+	case NETDEV_REGISTER:
+		return notifier_from_errno(dpa_set_mac_max_frame(net_dev,
+								 net_dev->mtu));
+	case NETDEV_CHANGEUPPER:
+		err = dpa_set_mac_max_frame(net_dev, net_dev->mtu);
+		if (unlikely(err < 0))
+			netdev_err(net_dev, "mac_dev->set_max_frame() = %d\n",
+				   err);
+		break;
+	}
+
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block dpa_netdev_nb = {
+	.notifier_call = dpa_netdev_event,
 };
 
 static int __init __cold dpa_load(void)
@@ -1170,36 +1472,31 @@ static int __init __cold dpa_load(void)
 
 	pr_info(DPA_DESCRIPTION "\n");
 
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-	dpa_debugfs_module_init();
-#endif /* CONFIG_FSL_DPAA_DBG_LOOP */
+	_errno = register_netdevice_notifier(&dpa_netdev_nb);
+	if (unlikely(_errno < 0)) {
+		pr_err(KBUILD_MODNAME ": register_netdevice_notifier() = %d\n",
+		       _errno);
+		return _errno;
+	}
+
 
 	/* initialise dpaa_eth mirror values */
 	dpa_rx_extra_headroom = fm_get_rx_extra_headroom();
 	dpa_max_frm = fm_get_max_frm();
 	dpa_num_cpus = num_possible_cpus();
 
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-	memset(dpa_loop_netdevs, 0, sizeof(dpa_loop_netdevs));
-#endif
 
 	_errno = platform_driver_register(&dpa_driver);
 	if (unlikely(_errno < 0)) {
 		pr_err(KBUILD_MODNAME
 			": %s:%hu:%s(): platform_driver_register() = %d\n",
 			KBUILD_BASENAME".c", __LINE__, __func__, _errno);
+		unregister_netdevice_notifier(&dpa_netdev_nb);
 	}
 
 	pr_debug(KBUILD_MODNAME ": %s:%s() ->\n",
 		KBUILD_BASENAME".c", __func__);
 
-#ifdef CONFIG_FSL_DPAA_CEETM
-	_errno = register_qdisc(&ceetm_qdisc_ops);
-	if (unlikely(_errno))
-		pr_err(KBUILD_MODNAME
-		       ": %s:%hu:%s(): register_qdisc() = %d\n",
-		       KBUILD_BASENAME ".c", __LINE__, __func__, _errno);
-#endif
 
 	return _errno;
 }
@@ -1210,15 +1507,11 @@ static void __exit __cold dpa_unload(void)
 	pr_debug(KBUILD_MODNAME ": -> %s:%s()\n",
 		KBUILD_BASENAME".c", __func__);
 
-#ifdef CONFIG_FSL_DPAA_CEETM
-	unregister_qdisc(&ceetm_qdisc_ops);
-#endif
 
 	platform_driver_unregister(&dpa_driver);
+	dpa_pool_watch_stop();
+	unregister_netdevice_notifier(&dpa_netdev_nb);
 
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-	dpa_debugfs_module_exit();
-#endif /* CONFIG_FSL_DPAA_DBG_LOOP */
 
 	/* Only one channel is used and needs to be relased after all
 	 * interfaces are removed

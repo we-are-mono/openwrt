@@ -43,10 +43,14 @@ struct mac_device {
 	struct device		*dev;
 	void			*priv;
 	uint8_t			 cell_index;
+	/* One of the MACs that can run at 10G (MAC9, MAC10), whatever its link
+	 * mode: its cell_index then counts within the 10G MACs. */
+	bool			 mac_10g;
 	struct resource		*res;
 	void __iomem		*vaddr;
 	uint8_t			 addr[ETH_ALEN];
 	bool			 promisc;
+	bool			 allmulti;
 
 	struct fm		*fm_dev;
 	struct fm_port		*port_dev[2];
@@ -78,6 +82,7 @@ struct mac_device {
 	int (*start)(struct mac_device *mac_dev);
 	int (*stop)(struct mac_device *mac_dev);
 	int (*set_promisc)(struct fm_mac_dev *fm_mac_dev, bool enable);
+	int (*set_allmulti)(struct fm_mac_dev *fm_mac_dev, bool enable);
 	int (*change_addr)(struct fm_mac_dev *fm_mac_dev, const uint8_t *addr);
 	int (*set_multi)(struct net_device *net_dev,
 			 struct mac_device *mac_dev);
@@ -86,6 +91,7 @@ struct mac_device {
 	int (*ptp_disable)(struct fm_mac_dev *fm_mac_dev);
 	int (*set_rx_pause)(struct fm_mac_dev *fm_mac_dev, bool en);
 	int (*set_tx_pause)(struct fm_mac_dev *fm_mac_dev, bool en);
+	int (*set_max_frame)(struct fm_mac_dev *fm_mac_dev, int len);
 	int (*fm_rtc_enable)(struct fm *fm_dev);
 	int (*fm_rtc_disable)(struct fm *fm_dev);
 	int (*fm_rtc_get_cnt)(struct fm *fm_dev, uint64_t *ts);

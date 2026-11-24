@@ -157,6 +157,7 @@ void fm_unbind(struct fm *fm);
 void *fm_get_handle(struct fm *fm);
 void *fm_get_rtc_handle(struct fm *fm);
 struct resource *fm_get_mem_region(struct fm *fm);
+int fm_get_fw_rev(struct fm *fm, u16 *package, u8 *major, u8 *minor);
 
 /**************************************************************************//**
  @Function	fm_port_bind
@@ -170,6 +171,9 @@ struct resource *fm_get_mem_region(struct fm *fm);
  @Cautions	Allowed only after the port was created.
 *//***************************************************************************/
 struct fm_port *fm_port_bind(struct device *fm_port_dev);
+
+int fm_port_get_hwid(const struct fm_port *port);
+int fm_port_get_icid(const struct fm_port *port);
 
 /**************************************************************************//**
  @Function	fm_port_unbind
@@ -321,9 +325,7 @@ int fm_get_rx_extra_headroom(void);
 
  @Description   Detect if the SoC is vulnerable to the A050385 errata
 *//***************************************************************************/
-#ifdef FM_ERRATUM_A050385
 bool fm_has_errata_a050385(void);
-#endif
 
 /**************************************************************************//**
 @Function     fm_port_enable_rx_l4csum
@@ -523,24 +525,6 @@ int fm_port_resume(struct fm_port *port);
 
 int fm_port_suspend(struct fm_port *port);
 
-#ifdef CONFIG_FMAN_PFC
-/**************************************************************************//**
-@Function     fm_port_set_pfc_priorities_mapping_to_qman_wq
-
-@Description  Associate a QMan Work Queue with a PFC priority on this
-		FM-port device (Tx port).
-
-@Param[in]    port   - A handle of the FM port device.
-
-@Param[in]    prio   - The PFC priority.
-
-@Param[in]    wq   - The Work Queue associated with the PFC priority.
-
-@Cautions     Allowed only after the port is initialized.
-*//***************************************************************************/
-int fm_port_set_pfc_priorities_mapping_to_qman_wq(struct fm_port *port,
-		uint8_t prio, uint8_t wq);
-#endif
 
 /**************************************************************************//**
 @Function     fm_mac_set_exception
@@ -562,6 +546,20 @@ struct fm_mac_dev *fm_mac_config(t_FmMacParams *params);
 int fm_mac_config_max_frame_length(struct fm_mac_dev *fm_mac_dev,
 		int len);
 
+/**************************************************************************//**
+ @Function	fm_mac_set_max_frame_length
+
+ @Description   Change the maximum Rx frame length of an initialized MAC.
+
+ @Param[in]     fm_mac_dev   - A handle of the FM MAC device.
+ @Param[in]     len          - Whole frame, FCS included; at most
+                               fm_get_max_frm().
+
+ @Return        0 on success; -EOPNOTSUPP if the MAC type cannot change it
+                after init; another negative errno otherwise.
+*//***************************************************************************/
+int fm_mac_set_max_frame_length(struct fm_mac_dev *fm_mac_dev, int len);
+
 int fm_mac_config_pad_and_crc(struct fm_mac_dev *fm_mac_dev, bool enable);
 
 int fm_mac_config_half_duplex(struct fm_mac_dev *fm_mac_dev, bool enable);
@@ -579,6 +577,8 @@ int fm_mac_disable(struct fm_mac_dev *fm_mac_dev);
 int fm_mac_resume(struct fm_mac_dev *fm_mac_dev);
 
 int fm_mac_set_promiscuous(struct fm_mac_dev *fm_mac_dev,
+		bool enable);
+int fm_mac_set_allmulti(struct fm_mac_dev *fm_mac_dev,
 		bool enable);
 
 int fm_mac_remove_hash_mac_addr(struct fm_mac_dev *fm_mac_dev,
@@ -603,25 +603,6 @@ int fm_mac_set_rx_pause_frames(
 int fm_mac_set_tx_pause_frames(struct fm_mac_dev *fm_mac_dev,
 					     bool en);
 
-#ifdef CONFIG_FSL_SDK_FMAN_RTC_API
-int fm_rtc_enable(struct fm *fm_dev);
-
-int fm_rtc_disable(struct fm *fm_dev);
-
-int fm_rtc_get_cnt(struct fm *fm_dev, uint64_t *ts);
-
-int fm_rtc_set_cnt(struct fm *fm_dev, uint64_t ts);
-
-int fm_rtc_get_drift(struct fm *fm_dev, uint32_t *drift);
-
-int fm_rtc_set_drift(struct fm *fm_dev, uint32_t drift);
-
-int fm_rtc_set_alarm(struct fm *fm_dev, uint32_t id,
-		uint64_t time);
-
-int fm_rtc_set_fiper(struct fm *fm_dev, uint32_t id,
-		uint64_t fiper);
-#else
 static inline int fm_rtc_enable(struct fm *fm_dev) { return 0; }
 
 static inline int fm_rtc_disable(struct fm *fm_dev) { return 0; }
@@ -641,7 +622,6 @@ static inline int fm_rtc_set_alarm(struct fm *fm_dev, uint32_t id,
 
 static inline int fm_rtc_set_fiper(struct fm *fm_dev, uint32_t id,
 				   uint64_t fiper) { return 0; }
-#endif
 
 int fm_mac_set_wol(struct fm_port *port, struct fm_mac_dev *fm_mac_dev,
 			bool en);

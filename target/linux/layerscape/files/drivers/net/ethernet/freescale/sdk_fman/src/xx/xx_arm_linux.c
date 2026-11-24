@@ -58,9 +58,6 @@
 
 #include <linux/workqueue.h>
 
-#ifdef BIGPHYSAREA_ENABLE
-#include <linux/bigphysarea.h>
-#endif /* BIGPHYSAREA_ENABLE */
 
 //#include <sysdev/fsl_soc.h>
 #include <asm/pgtable.h>
@@ -83,37 +80,6 @@
 
 #define __ERR_MODULE__      MODULE_UNKNOWN
 
-#ifdef BIGPHYSAREA_ENABLE
-#define MAX_ALLOCATION_SIZE     128 * 1024 /* Maximum size allocated with kmalloc is 128K */
-
-
-/* TODO: large allocations => use big phys area */
-/******************************************************************************
- * routine:     get_nr_pages
- *
- * description:
- *     calculates the number of memory pages for a given size (in bytes)
- *
- * arguments:
- *     size       - the number of bytes
- *
- * return code:
- *     The number of pages
- *
- *****************************************************************************/
-static __inline__ uint32_t get_nr_pages (uint32_t size)
-{
-    return (uint32_t)((size >> PAGE_SHIFT) + (size & PAGE_SHIFT ? 1 : 0));
-}
-
-static bool in_big_phys_area (uint32_t addr)
-{
-    uint32_t base, size;
-
-    bigphysarea_get_details (&base, &size);
-    return ((addr >= base) && (addr < base + size));
-}
-#endif /* BIGPHYSAREA_ENABLE */
 
 void * xx_Malloc(uint32_t n)
 {
@@ -121,11 +87,6 @@ void * xx_Malloc(uint32_t n)
     uint32_t    flags;
 
     flags = XX_DisableAllIntr();
-#ifdef BIGPHYSAREA_ENABLE
-    if (n >= MAX_ALLOCATION_SIZE)
-        a = (void*)bigphysarea_alloc_pages(get_nr_pages(n), 0, GFP_ATOMIC);
-    else
-#endif /* BIGPHYSAREA_ENABLE */
     a = (void *)kmalloc((uint32_t)n, GFP_ATOMIC);
     if (!a)
         XX_Print("No memory for XX_Malloc\n");
@@ -136,11 +97,6 @@ void * xx_Malloc(uint32_t n)
 
 void xx_Free(void *p)
 {
-#ifdef BIGPHYSAREA_ENABLE
-    if (in_big_phys_area ((uint32_t)p))
-        bigphysarea_free_pages(p);
-    else
-#endif /* BIGPHYSAREA_ENABLE */
     kfree(p);
 }
 
@@ -395,84 +351,14 @@ typedef struct
     struct delayed_work dwork;
 } t_Tasklet;
 
-static void GenericTaskletCallback(struct work_struct *p_Work)
-{
-    t_Tasklet *p_Task = container_of(p_Work, t_Tasklet, dwork.work);
-
-    p_Task->f_Callback(p_Task->h_Data);
-}
 #endif    /* LINUX_VERSION_CODE */
 
-
-t_TaskletHandle XX_InitTasklet (void (*routine)(void *), void *data)
-{
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,20)
-    struct work_struct *p_Task;
-    p_Task = (struct work_struct *)XX_Malloc(sizeof(struct work_struct));
-    INIT_WORK(p_Task, routine, data);
-#else
-    t_Tasklet *p_Task = (t_Tasklet *)XX_Malloc(sizeof(t_Tasklet));
-    p_Task->h_Data = data;
-    p_Task->f_Callback = routine;
-    INIT_DELAYED_WORK(&p_Task->dwork, GenericTaskletCallback);
-#endif    /* LINUX_VERSION_CODE */
-
-    return (t_TaskletHandle)p_Task;
-}
 
 
 void XX_FreeTasklet (t_TaskletHandle h_Tasklet)
 {
     if (h_Tasklet)
         XX_Free(h_Tasklet);
-}
-
-int XX_ScheduleTask(t_TaskletHandle h_Tasklet, int immediate)
-{
-    int ans;
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,20)
-    if (immediate)
-        ans = schedule_work(h_Tasklet);
-    else
-        ans = schedule_delayed_work(h_Tasklet, 1);
-#else
-    if (immediate)
-        ans = schedule_delayed_work(&((t_Tasklet *)h_Tasklet)->dwork, 0);
-    else
-        ans = schedule_delayed_work(&((t_Tasklet *)h_Tasklet)->dwork, HZ);
-#endif /* LINUX_VERSION_CODE */
-
-    return ans;
-}
-
-int XX_TaskletIsQueued(t_TaskletHandle h_Tasklet)
-{
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,20)
-    return (int)(((struct work_struct *)h_Tasklet)->pending);
-#else
-    return (int)delayed_work_pending(&((t_Tasklet *)h_Tasklet)->dwork);
-#endif    /* LINUX_VERSION_CODE */
-}
-
-void XX_SetTaskletData(t_TaskletHandle h_Tasklet, t_Handle data)
-{
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,0)
-    ((struct tq_struct *)h_Tasklet)->data = data;
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(2,6,20)
-    ((struct work_struct *)h_Tasklet)->data = data;
-#else
-    ((t_Tasklet *)h_Tasklet)->h_Data = data;
-#endif    /* LINUX_VERSION_CODE */
-}
-
-t_Handle XX_GetTaskletData(t_TaskletHandle h_Tasklet)
-{
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,20)
-    return (t_Handle)(((struct work_struct *)h_Tasklet)->data);
-#else
-    return ((t_Tasklet *)h_Tasklet)->h_Data;
-#endif    /* LINUX_VERSION_CODE */
 }
 
 
@@ -497,20 +383,17 @@ void XX_FreeSpinlock(t_Handle h_Spinlock)
         XX_Free(h_Spinlock);
 }
 
-void XX_LockSpinlock(t_Handle h_Spinlock)
-{
-    spin_lock((spinlock_t *)h_Spinlock);
-}
-
-void XX_UnlockSpinlock(t_Handle h_Spinlock)
-{
-    spin_unlock((spinlock_t *)h_Spinlock);
-}
-
 uint32_t XX_LockIntrSpinlock(t_Handle h_Spinlock)
 {
     unsigned long intrFlags;
     spin_lock_irqsave((spinlock_t *)h_Spinlock, intrFlags);
+    return intrFlags;
+}
+
+uint32_t XX_LockIntrSpinlockNested(t_Handle h_Spinlock, int subclass)
+{
+    unsigned long intrFlags;
+    spin_lock_irqsave_nested((spinlock_t *)h_Spinlock, intrFlags, subclass);
     return intrFlags;
 }
 
@@ -519,24 +402,6 @@ void XX_UnlockIntrSpinlock(t_Handle h_Spinlock, uint32_t intrFlags)
      spin_unlock_irqrestore((spinlock_t *)h_Spinlock, (unsigned long)intrFlags);
 }
 
-
-/*****************************************************************************/
-/*                        Timers Service Routines                            */
-/*****************************************************************************/
-/* The time now is in mili sec. resolution */
-uint32_t XX_CurrentTime(void)
-{
-    return (jiffies*1000)/HZ;
-}
-
-uint32_t XX_Sleep(uint32_t msecs)
-{
-    int tmp_jiffies = (msecs*HZ)/1000;
-
-    if ((msecs*HZ)%1000)
-        tmp_jiffies++;
-    return schedule_timeout(tmp_jiffies);
-}
 
 /*BEWARE!!!!! UDelay routine is BUSY WAITTING!!!!!*/
 void XX_UDelay(uint32_t usecs)

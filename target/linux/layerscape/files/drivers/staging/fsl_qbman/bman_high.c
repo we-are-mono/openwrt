@@ -117,11 +117,6 @@ static inline void put_affine_portal(void)
 {
 	put_cpu_var(bman_affine_portal);
 }
-static inline struct bman_portal *get_poll_portal(void)
-{
-	return &get_cpu_var(bman_affine_portal);
-}
-#define put_poll_portal()
 
 /* GOTCHA: this object type refers to a pool, it isn't *the* pool. There may be
  * more than one such object per Bman buffer pool, eg. if different users of the
@@ -134,9 +129,6 @@ struct bman_pool {
 	/* stockpile state - NULL unless BMAN_POOL_FLAG_STOCKPILE is set */
 	struct bm_buffer *sp;
 	unsigned int sp_fill;
-#ifdef CONFIG_FSL_DPA_CHECKING
-	atomic_t in_use;
-#endif
 };
 
 /* (De)Registration of depletion notification callbacks */
@@ -179,13 +171,6 @@ static void depletion_unlink(struct bman_pool *pool)
 	PORTAL_IRQ_UNLOCK(pool->portal, irqflags);
 }
 
-/* In the case that the application's core loop calls qman_poll() and
- * bman_poll(), we ought to balance how often we incur the overheads of the
- * slow-path poll. We'll use two decrementer sources. The idle decrementer
- * constant is used when the last slow-poll detected no work to do, and the busy
- * decrementer constant when the last slow-poll had work to do. */
-#define SLOW_POLL_IDLE 1000
-#define SLOW_POLL_BUSY 10
 static u32 __poll_portal_slow(struct bman_portal *p, u32 is);
 
 /* Portal interrupt handler */
@@ -389,45 +374,6 @@ struct bman_portal *bman_create_affine_slave(struct bman_portal *redirect,
 #endif
 }
 
-void bman_destroy_portal(struct bman_portal *bm)
-{
-	const struct bm_portal_config *pcfg;
-	pcfg = bm->config;
-	bm_rcr_cce_update(&bm->p);
-	bm_rcr_cce_update(&bm->p);
-
-	free_irq(pcfg->public_cfg.irq, bm);
-
-	kfree(bm->pools);
-	bm_isr_finish(&bm->p);
-	bm_mc_finish(&bm->p);
-	bm_rcr_finish(&bm->p);
-	bm->config = NULL;
-	if (bm->alloced)
-		kfree(bm);
-}
-
-const struct bm_portal_config *bman_destroy_affine_portal(void)
-{
-	struct bman_portal *bm = get_raw_affine_portal();
-	const struct bm_portal_config *pcfg;
-#ifdef CONFIG_FSL_DPA_PORTAL_SHARE
-	if (bm->sharing_redirect) {
-		bm->sharing_redirect = NULL;
-		put_affine_portal();
-		return NULL;
-	}
-	bm->is_shared = 0;
-#endif
-	pcfg = bm->config;
-	bman_destroy_portal(bm);
-	spin_lock(&affine_mask_lock);
-	cpumask_clear_cpu(pcfg->public_cfg.cpu, &affine_mask);
-	spin_unlock(&affine_mask_lock);
-	put_affine_portal();
-	return pcfg;
-}
-
 /* When release logic waits on available RCR space, we need a global waitqueue
  * in the case of "affine" use (as the waits wake on different cpus which means
  * different portals - so we can't wait on any per-portal waitqueue). */
@@ -526,15 +472,6 @@ const struct bman_portal_config *bman_get_portal_config(void)
 }
 EXPORT_SYMBOL(bman_get_portal_config);
 
-u32 bman_irqsource_get(void)
-{
-	struct bman_portal *p = get_raw_affine_portal();
-	u32 ret = p->irq_sources & BM_PIRQ_VISIBLE;
-	put_affine_portal();
-	return ret;
-}
-EXPORT_SYMBOL(bman_irqsource_get);
-
 int bman_p_irqsource_add(struct bman_portal *p, __maybe_unused u32 bits)
 {
 #ifdef CONFIG_FSL_DPA_PORTAL_SHARE
@@ -602,48 +539,6 @@ const cpumask_t *bman_affine_cpus(void)
 }
 EXPORT_SYMBOL(bman_affine_cpus);
 
-u32 bman_poll_slow(void)
-{
-	struct bman_portal *p = get_poll_portal();
-	u32 ret;
-#ifdef CONFIG_FSL_DPA_PORTAL_SHARE
-	if (unlikely(p->sharing_redirect))
-		ret = (u32)-1;
-	else
-#endif
-	{
-		u32 is = bm_isr_status_read(&p->p) & ~p->irq_sources;
-		ret = __poll_portal_slow(p, is);
-		bm_isr_status_clear(&p->p, ret);
-	}
-	put_poll_portal();
-	return ret;
-}
-EXPORT_SYMBOL(bman_poll_slow);
-
-/* Legacy wrapper */
-void bman_poll(void)
-{
-	struct bman_portal *p = get_poll_portal();
-#ifdef CONFIG_FSL_DPA_PORTAL_SHARE
-	if (unlikely(p->sharing_redirect))
-		goto done;
-#endif
-	if (!(p->slowpoll--)) {
-		u32 is = bm_isr_status_read(&p->p) & ~p->irq_sources;
-		u32 active = __poll_portal_slow(p, is);
-		if (active)
-			p->slowpoll = SLOW_POLL_BUSY;
-		else
-			p->slowpoll = SLOW_POLL_IDLE;
-	}
-#ifdef CONFIG_FSL_DPA_PORTAL_SHARE
-done:
-#endif
-	put_poll_portal();
-}
-EXPORT_SYMBOL(bman_poll);
-
 static const u32 zero_thresholds[4] = {0, 0, 0, 0};
 
 struct bman_pool *bman_new_pool(const struct bman_pool_params *params)
@@ -676,9 +571,6 @@ struct bman_pool *bman_new_pool(const struct bman_pool_params *params)
 	pool->sp = NULL;
 	pool->sp_fill = 0;
 	pool->params = *params;
-#ifdef CONFIG_FSL_DPA_CHECKING
-	atomic_set(&pool->in_use, 1);
-#endif
 	if (params->flags & BMAN_POOL_FLAG_DYNAMIC_BPID)
 		pool->params.bpid = bpid;
 	if (params->flags & BMAN_POOL_FLAG_STOCKPILE) {
@@ -901,10 +793,6 @@ int bman_release_by_bpid(u8 bpid, const struct bm_buffer *bufs, u8 num)
 	__maybe_unused unsigned long irqflags;
 	u32 i = num - 1;
 
-#ifdef CONFIG_FSL_DPA_CHECKING
-	if (!num || num > 8)
-		return -EINVAL;
-#endif
 
 	memset(&irqflags, 0, sizeof(irqflags));
 
@@ -942,21 +830,9 @@ int bman_release(struct bman_pool *pool, const struct bm_buffer *bufs, u8 num,
 			u32 flags)
 {
 	int ret;
-#ifdef CONFIG_FSL_DPA_CHECKING
-	if (!num || (num > 8))
-		return -EINVAL;
-	if (pool->params.flags & BMAN_POOL_FLAG_NO_RELEASE)
-		return -EINVAL;
-#endif
 	/* Without stockpile, this API is a pass-through to the h/w operation */
 	if (!(pool->params.flags & BMAN_POOL_FLAG_STOCKPILE))
 		return __bman_release(pool, bufs, num, flags);
-#ifdef CONFIG_FSL_DPA_CHECKING
-	if (!atomic_dec_and_test(&pool->in_use)) {
-		pr_crit("Parallel attempts to enter bman_released() detected.");
-		panic("only one instance of bman_released/acquired allowed");
-	}
-#endif
 	/* Two movements of buffers are possible, and can occur in either order.
 	 * A: moving buffers from the caller to the stockpile.
 	 * B: moving buffers from the stockpile to hardware.
@@ -1002,9 +878,6 @@ int bman_release(struct bman_pool *pool, const struct bm_buffer *bufs, u8 num,
 	/* success */
 	ret = 0;
 release_done:
-#ifdef CONFIG_FSL_DPA_CHECKING
-	atomic_inc(&pool->in_use);
-#endif
 	return ret;
 }
 EXPORT_SYMBOL(bman_release);
@@ -1042,21 +915,9 @@ int bman_acquire(struct bman_pool *pool, struct bm_buffer *bufs, u8 num,
 			u32 flags)
 {
 	int ret;
-#ifdef CONFIG_FSL_DPA_CHECKING
-	if (!num || (num > 8))
-		return -EINVAL;
-	if (pool->params.flags & BMAN_POOL_FLAG_ONLY_RELEASE)
-		return -EINVAL;
-#endif
 	/* Without stockpile, this API is a pass-through to the h/w operation */
 	if (!(pool->params.flags & BMAN_POOL_FLAG_STOCKPILE))
 		return __bman_acquire(pool, bufs, num);
-#ifdef CONFIG_FSL_DPA_CHECKING
-	if (!atomic_dec_and_test(&pool->in_use)) {
-		pr_crit("Parallel attempts to enter bman_acquire() detected.");
-		panic("only one instance of bman_released/acquired allowed");
-	}
-#endif
 	/* Two movements of buffers are possible, and can occur in either order.
 	 * A: moving buffers from stockpile to the caller.
 	 * B: moving buffers from hardware to the stockpile.
@@ -1105,9 +966,6 @@ int bman_acquire(struct bman_pool *pool, struct bm_buffer *bufs, u8 num,
 	/* success */
 	ret = num;
 acquire_done:
-#ifdef CONFIG_FSL_DPA_CHECKING
-	atomic_inc(&pool->in_use);
-#endif
 	return ret;
 }
 EXPORT_SYMBOL(bman_acquire);

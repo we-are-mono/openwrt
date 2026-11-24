@@ -1,27 +1,11 @@
-# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ 3a081ac72bfa43322df0c3da5a49c6a80160a434
-010-ask-fman-dpaa-ehash.patch
+# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ 8553df4c9c0124cd99a88ec04e8fca93a960a3bc
+010-ask-fast-path-core.patch
 040-ask-xfrm-ipsec-offload.patch
 080-wext-core-restore-ndo_do_ioctl.patch
-090-qbman-dpa_alloc-preallocate-nodes.patch
-091-sdk_dpaa-dpa_get_channel-use-mutex.patch
-092-sdk_fman-FmPcdLockTryLockAll-nest-annotation.patch
 093-netlink-name-every-cb-mutex-class.patch
-094-sdk-fman-dpaa-qbman-kasan-sanitize-off.patch
-096-sdk_fman-mac-hash-alloc-null-check.patch
-098-sdk_dpaa-bp-alloc-slab-build-skb.patch
-099-sdk_fman-ehash-flex-arrays.patch
-100-sdk_dpaa-ethtool-quiet-phyless-ports.patch
-101-sdk_fman-sysfs-restore-irqs-on-early-return.patch
-102-sdk_dpaa-extend-stop-drain-delays.patch
-103-qbman-ceetm-lfq-unwind.patch
-104-sdk_dpaa-rx-stats-before-stack-verdict.patch
-105-sdk_dpaa-buffer-seed-failure.patch
-106-sdk_fman-keep-firmware-port-icids.patch
-107-sdk_dpaa-offload-hooks-under-rcu.patch
+094-qbman-kasan-sanitize-off.patch
 108-xfrm-validate-xmit-einprogress.patch
-109-sdk_dpaa-rx-max-frame-follows-mtu.patch
 110-sdk-mainline-build-compat.patch
-111-sdk_dpaa-cpu-queues-bounded-by-pool-share.patch
 120-emc2305-dt-fan-control.patch
 125-usb-typec-hd3ss3220-port-configuration.patch
 130-thermal-linear-governor.patch
@@ -35,7 +19,6 @@
 147-netfilter-flowtable-attach-conntrack.patch
 148-netfilter-port-probe.patch
 149-netfilter-ipv6-prefix-translation.patch
-150-sdk_dpaa-hardware-qdisc.patch
 151-netfilter-flowtable-pppoe-peer.patch
 152-netfilter-nftables-device-hook-transactions.patch
 160-bridge-switchdev-mdb-group.patch
@@ -48,7 +31,4 @@
 174-netfilter-flowtable-carry-transit-esp-and-ip-in-ip.patch
 175-netfilter-flowtable-conntrack-sees-carried-replies.patch
 180-wireguard-fastpath.patch
-184-sdk_dpaa-rx-checksum-feature.patch
 186-netfilter-flowtable-walk-latency.patch
-188-qbman-cgr-lock-raw-spinlock.patch
-189-sdk_dpaa-rx-pool-recovery.patch

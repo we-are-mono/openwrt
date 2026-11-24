@@ -37,6 +37,7 @@
 #include <linux/fsl_qman.h>	/* struct qman_fq */
 
 #include "fm_ext.h"
+#include "fm_ehash.h"
 #include "dpaa_eth_trace.h"
 
 extern int dpa_rx_extra_headroom;
@@ -64,10 +65,10 @@ struct dpa_buffer_layout_s {
 	uint16_t	data_align;
 };
 
+/* An assertion the SDK compiled in only for its debug builds, which nothing
+ * builds: it checks nothing. */
 static inline void DPA_BUG_ON(bool cond)
 {
-	if (IS_ENABLED(CONFIG_FSL_DPAA_ETH_DEBUG))
-		BUG_ON(cond);
 }
 
 #define DPA_TX_PRIV_DATA_SIZE	16
@@ -88,27 +89,28 @@ static inline void DPA_BUG_ON(bool cond)
 	(FM_PORT_FRM_ERR_UNSUPPORTED_FORMAT | \
 	 FM_PORT_FRM_ERR_LENGTH | FM_PORT_FRM_ERR_DMA)
 
-#ifndef CONFIG_FSL_DPAA_ETH_JUMBO_FRAME
 /* The raw buffer size must be cacheline aligned.
- * Normally we use 2K buffers.
+ * As 1518 byte packets are received in scatter gather buffers from DPAA,
+ * and these buffers are used by WIFI which requires contiguous buffers,
+ * the buffer size is increased from 2048 to 2176, to accommodate them in a
+ * contiguous fd.
  */
-#define DPA_BP_RAW_SIZE		2048
+#define DPA_BP_RAW_SIZE_STD	2176
+#ifndef CONFIG_FSL_DPAA_ETH_JUMBO_FRAME
+#define DPA_BP_RAW_SIZE		DPA_BP_RAW_SIZE_STD
 #else
-/* For jumbo frame optimizations, use buffers large enough to accommodate
- * 9.6K frames, FD maximum offset, skb sh_info overhead and some extra
- * space to account for further alignments.
+/* For jumbo frames, buffers large enough to hold a 9.6K frame, the FD's
+ * maximum offset, the skb shared info and some room for further alignment.
+ * With erratum A050385 a buffer must not cross a 4K boundary, so it stays
+ * a standard one, in a page of its own (_dpa_bp_add_8_bufs()).
  */
 #define DPA_MAX_FRM_SIZE	9600
-#ifndef FM_ERRATUM_A050385
-#define DPA_BP_RAW_SIZE \
+#define DPA_BP_RAW_SIZE_JUMBO \
 	((DPA_MAX_FRM_SIZE + DPA_MAX_FD_OFFSET + \
 	  sizeof(struct skb_shared_info) + 128) & ~(SMP_CACHE_BYTES - 1))
-#else /* FM_ERRATUM_A050385 */
-#define DPA_BP_RAW_SIZE ((unlikely(fm_has_errata_a050385())) ? 2048 : \
-	((DPA_MAX_FRM_SIZE + DPA_MAX_FD_OFFSET + \
-	  sizeof(struct skb_shared_info) + 128) & ~(SMP_CACHE_BYTES - 1)))
-#endif /* FM_ERRATUM_A050385 */
-#endif /* CONFIG_FSL_DPAA_ETH_JUMBO_FRAME */
+#define DPA_BP_RAW_SIZE ((unlikely(fm_has_errata_a050385())) ? \
+			 DPA_BP_RAW_SIZE_STD : DPA_BP_RAW_SIZE_JUMBO)
+#endif
 
 /* This is what FMan is ever allowed to use.
  * FMan-DMA requires 16-byte alignment for Rx buffers, but SKB_DATA_ALIGN is
@@ -133,11 +135,6 @@ static inline void DPA_BUG_ON(bool cond)
  * supported frame size), set the recycling upper limit to 16K.
  */
 #define DPA_RECYCLE_MAX_SIZE	16384
-
-#if defined(CONFIG_FSL_SDK_FMAN_TEST)
-/*TODO: temporary for fman pcd testing */
-#define FMAN_PCD_TESTS_MAX_NUM_RANGES	20
-#endif
 
 #define DPAA_ETH_FQ_DELTA	0x10000
 
@@ -190,14 +187,48 @@ static inline void DPA_BUG_ON(bool cond)
 #define fm_l4_frame_is_tcp(parse_result_ptr) \
 	((parse_result_ptr)->l4r & FM_L4_PARSE_RESULT_TCP)
 
-/* number of Tx queues to FMan */
-#ifdef CONFIG_FMAN_PFC
-#define DPAA_ETH_TX_QUEUES	(NR_CPUS * CONFIG_FMAN_PFC_COS_COUNT)
-#else
-#define DPAA_ETH_TX_QUEUES	NR_CPUS
-#endif
+/* Number of Tx queues to FMan that carry ordinary, unclassified traffic.
+ *
+ * These are the queues the CPU sends through: locally generated traffic, flows
+ * that were never offloaded, and the punt path. A hardware-offloaded flow
+ * never reaches one, so this count says nothing about offload capacity.
+ *
+ * It was NR_CPUS, which is a distribution's build-time ceiling rather than a
+ * property of the board: the same driver offered 16 queues under one kernel
+ * configuration and 64 under another, and sized egress_fqs[] and conf_fqs[] to
+ * match. A hardware qdisc allocates its leaf classes out of the queues above
+ * this count, so a budget that moves with someone else's Kconfig cannot be
+ * part of an interface contract.
+ *
+ * Sixteen is chosen because it is what the more constrained of those two
+ * configurations already ran, which makes this a fixed number rather than a
+ * new one. It stays a power of two because the Tx paths index conf_fqs[] with
+ * & (DPAA_ETH_TX_QUEUES - 1). Queues are picked by flow hash rather than by
+ * CPU -- this driver installs no XPS maps -- so the count trades qdisc
+ * contention between concurrent software senders against the frame queues each
+ * one costs, and is not bounded by the core count in either direction.
+ */
+#define DPAA_ETH_TX_QUEUES	16
+
+/* Headroom above the direct queues, one slot per leaf class a hardware qdisc
+ * can hold on this port, reserved so it can hand sch_htb a real and
+ * exclusively owned netdev_queue index for each. Nothing allocates an egress
+ * FQ for these: a leaf's frames leave through a CEETM logical FQ that the
+ * scheduler owns, not through egress_fqs[].
+ *
+ * A tree's leaves spread over its CEETM channels, one for each class under
+ * its root, so the count is not one channel's sixteen class queues: sixty-four
+ * is a leaf on each of a CEETM instance's thirty-two channels twice over. Each
+ * slot is a netdev queue, which the stack's default root qdisc also gives a
+ * child qdisc of its own until a hardware qdisc takes the port. And each
+ * slot's ethtool counters are named by its index, which a hundred would not
+ * fit (dpa_get_strings()).
+ */
+#define DPAA_ETH_CEETM_LEAF_QUEUES	64
+#define DPAA_ETH_TX_QUEUES_MAX	(DPAA_ETH_TX_QUEUES + DPAA_ETH_CEETM_LEAF_QUEUES)
 
 #define DPAA_ETH_RX_QUEUES	128
+#define DPAA_IP_VERSION_4  4
 
 /* Convenience macros for storing/retrieving the skb back-pointers. They must
  * accommodate both recycling and confirmation paths - i.e. cases when the buf
@@ -221,13 +252,6 @@ static inline void DPA_BUG_ON(bool cond)
 #ifdef CONFIG_PM
 /* Magic Packet wakeup */
 #define DPAA_WOL_MAGIC		0x00000001
-#endif
-
-#if defined(CONFIG_FSL_SDK_FMAN_TEST)
-struct pcd_range {
-	uint32_t			 base;
-	uint32_t			 count;
-};
 #endif
 
 /* More detailed FQ types - used for fine-grained WQ assignments */
@@ -327,7 +351,7 @@ struct dpa_napi_portal {
 
 struct dpa_percpu_priv_s {
 	struct net_device *net_dev;
-	struct dpa_napi_portal *np;
+	struct dpa_napi_portal np;
 	u64 in_interrupt;
 	u64 tx_returned;
 	u64 tx_confirm;
@@ -335,11 +359,15 @@ struct dpa_percpu_priv_s {
 	u64 tx_frag_skbuffs;
 	/* number of S/G frames received */
 	u64 rx_sg;
-
+#if defined(CONFIG_INET_IPSEC_OFFLOAD) && defined(CONFIG_CPE_FAST_PATH)
+	u64 tx_caam_enc;
+	u64 tx_caam_dec;
+#endif
 	struct rtnl_link_stats64 stats;
 	struct dpa_rx_errors rx_errors;
 	struct dpa_ern_cnt ern_cnt;
 };
+
 
 struct dpa_priv_s {
 	struct dpa_percpu_priv_s	__percpu *percpu_priv;
@@ -360,19 +388,10 @@ struct dpa_priv_s {
 	uint16_t		 channel;	/* "fsl,qman-channel-id" */
 	struct list_head	 dpa_fq_list;
 
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-	struct dentry		*debugfs_loop_file;
-#endif
 
 	uint32_t		 msg_enable;	/* net_device message level */
 #ifdef CONFIG_FSL_DPAA_1588
 	struct dpa_ptp_tsu	 *tsu;
-#endif
-
-#if defined(CONFIG_FSL_SDK_FMAN_TEST)
-/* TODO: this is temporary until pcd support is implemented in dpaa */
-	int			priv_pcd_num_ranges;
-	struct pcd_range	priv_pcd_ranges[FMAN_PCD_TESTS_MAX_NUM_RANGES];
 #endif
 
 	struct {
@@ -394,6 +413,7 @@ struct dpa_priv_s {
 	/* Use a per-port CGR for ingress traffic. */
 	bool use_ingress_cgr;
 	struct qman_cgr ingress_cgr;
+	struct qman_cgr ingress_cgr_hi_prio;
 
 #ifdef CONFIG_FSL_DPAA_TS
 	bool ts_tx_en; /* Tx timestamping enabled */
@@ -408,13 +428,16 @@ struct dpa_priv_s {
 #ifdef CONFIG_PM
 	u32 wol;
 #endif
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-	int loop_id;
-	int loop_to;
-#endif
-#ifdef CONFIG_FSL_DPAA_CEETM
+#ifdef CONFIG_CPE_FAST_PATH
 	bool ceetm_en; /* CEETM QoS enabled */
+	void *qm_ctx;  /* CEETM context */
 #endif
+	void *ifinfo;
+	/* The receive pool's watch (dpaa_eth_pool.c), private ports only:
+	 * the port on its list, and the port's out-of-buffer discard count
+	 * as last read. Under dpa_pool_lock. */
+	struct list_head pool_watch;
+	u32 pool_discards;
 };
 
 struct fm_port_fqs {
@@ -425,18 +448,21 @@ struct fm_port_fqs {
 };
 
 
-#ifdef CONFIG_FSL_DPAA_DBG_LOOP
-extern struct net_device *dpa_loop_netdevs[20];
-#endif
 
-int dpaa_eth_refill_bpools(struct dpa_bp *dpa_bp, int *count_ptr);
+int dpaa_eth_refill_bpools(struct dpa_bp *dpa_bp, int *count_ptr, int threshold);
+int dpaa_eth_reseed_bpool(struct dpa_bp *dpa_bp, int count);
+void dpa_pool_watch_add(struct dpa_priv_s *priv);
+void dpa_pool_watch_del(struct dpa_priv_s *priv);
+void dpa_pool_watch_stop(void);
+void dpa_pool_watch_stats(u64 *episodes, u64 *reseeded);
 void __hot _dpa_rx(struct net_device *net_dev,
 		struct qman_portal *portal,
 		const struct dpa_priv_s *priv,
 		struct dpa_percpu_priv_s *percpu_priv,
 		const struct qm_fd *fd,
 		u32 fqid,
-		int *count_ptr);
+		int *count_ptr,
+		struct qman_poll_ctx *ctx);
 int __hot dpa_tx(struct sk_buff *skb, struct net_device *net_dev);
 int __hot dpa_tx_extended(struct sk_buff *skb, struct net_device *net_dev,
 		struct qman_fq *egress_fq, struct qman_fq *conf_fq);
@@ -475,26 +501,17 @@ int dpa_enable_tx_csum(struct dpa_priv_s *priv,
 	struct sk_buff *skb, struct qm_fd *fd, char *parse_results);
 
 static inline int dpaa_eth_napi_schedule(struct dpa_percpu_priv_s *percpu_priv,
-			struct qman_portal *portal)
+					 struct qman_portal *portal,
+					 bool sched_napi)
 {
-	/* In case of threaded ISR for RT enable kernel,
-	 * in_irq() does not return appropriate value, so use
-	 * in_serving_softirq to distinguish softirq or irq context.
-	 */
-	if (unlikely(in_irq() || !in_serving_softirq())) {
+	if (sched_napi) {
 		/* Disable QMan IRQ and invoke NAPI */
-		int ret = qman_p_irqsource_remove(portal, QM_PIRQ_DQRI);
-		if (likely(!ret)) {
-			const struct qman_portal_config *pc =
-					qman_p_get_portal_config(portal);
-			struct dpa_napi_portal *np =
-					&percpu_priv->np[pc->index];
+		qman_p_irqsource_remove(portal, QM_PIRQ_DQRI);
 
-			np->p = portal;
-			napi_schedule(&np->napi);
-			percpu_priv->in_interrupt++;
-			return 1;
-		}
+		percpu_priv->np.p = portal;
+		napi_schedule(&percpu_priv->np.napi);
+		percpu_priv->in_interrupt++;
+		return 1;
 	}
 	return 0;
 }
@@ -632,16 +649,7 @@ static inline void _dpa_assign_wq(struct dpa_fq *fq)
 	}
 }
 
-#ifdef CONFIG_FMAN_PFC
-/* Use in lieu of skb_get_queue_mapping() */
-#define dpa_get_queue_mapping(skb) \
-	(((skb)->priority < CONFIG_FMAN_PFC_COS_COUNT) ? \
-		((skb)->priority * dpa_num_cpus + smp_processor_id()) : \
-		((CONFIG_FMAN_PFC_COS_COUNT - 1) * \
-			dpa_num_cpus + smp_processor_id()));
-#else
 #define dpa_get_queue_mapping(skb) skb_get_queue_mapping(skb)
-#endif
 
 static inline void _dpa_bp_free_pf(void *addr)
 {
@@ -656,7 +664,6 @@ static inline void _dpa_bp_free_pf(void *addr)
  * on egress.
  */
 
-#ifdef FM_ERRATUM_A050385
 #define CROSS_4K(start, size) \
 	(((uintptr_t)(start) + (size)) > \
 	 (((uintptr_t)(start) + 0x1000) & ~0xFFF))
@@ -664,6 +671,13 @@ static inline void _dpa_bp_free_pf(void *addr)
  * we reserve 256 bytes instead to guarantee 256 data alignment.
  */
 #define DPAA_A050385_HEADROOM	256
-#endif  /* FM_ERRATUM_A050385 */
+
+/* ASK fast-path exports (dpaa_eth_sg.c / dpaa_eth_common.c); also
+ * consumed by the out-of-tree cdx module. */
+int dpaa_bp_alloc_n_add_buffs(const struct dpa_bp *dpa_bp, uint32_t nbuffs,
+			      bool act_skb);
+
+void dpaa_sec_sg_release(const struct qm_fd *fd, bool free_skb);
+unsigned int dpaa_sec_sg_reap(unsigned int budget);
 
 #endif	/* __DPA_H */

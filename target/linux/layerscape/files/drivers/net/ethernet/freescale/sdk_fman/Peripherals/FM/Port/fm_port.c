@@ -108,11 +108,6 @@ static t_Error CheckInitParameters(t_FmPort *p_FmPort)
                         E_INVALID_VALUE,
                         ("liodnOffset is larger than %d", FM_LIODN_OFFSET_MASK+1));
 
-#ifdef FM_NO_BACKUP_POOLS
-            if ((p_FmPort->fmRevInfo.majorRev != 4) && (p_FmPort->fmRevInfo.majorRev < 6))
-            if (p_FmPort->p_FmPortDriverParam->p_BackupBmPools)
-            RETURN_ERROR(MAJOR, E_NOT_SUPPORTED, ("BackupBmPools"));
-#endif /* FM_NO_BACKUP_POOLS */
         }
 
         /****************************************/
@@ -230,14 +225,6 @@ static t_Error CheckInitParameters(t_FmPort *p_FmPort)
                     MAJOR,
                     E_INVALID_VALUE,
                     ("bufPoolDepletion.numOfPools can not be 0 when poolsGrpModeEnable=TRUE"));
-#ifdef FM_CSI_CFED_LIMIT
-        if (p_FmPort->fmRevInfo.majorRev == 4)
-        {
-            /* Check that not larger than 16 */
-            if (p_DfltConfig->rx_cut_end_bytes + p_DfltConfig->checksum_bytes_ignore > FRAME_END_DATA_SIZE)
-            RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("cheksumLastBytesIgnore + cutBytesFromEnd can't be larger than %d", FRAME_END_DATA_SIZE));
-        }
-#endif /* FM_CSI_CFED_LIMIT */
     }
 
     /****************************************/
@@ -317,7 +304,6 @@ static t_Error CheckInitParameters(t_FmPort *p_FmPort)
     /****************************************/
     /*   Offline Ports                      */
     /****************************************/
-#ifdef FM_OP_OPEN_DMA_MIN_LIMIT
     if ((p_FmPort->fmRevInfo.majorRev >= 6)
             && (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
             && p_Params->setNumOfOpenDmas
@@ -326,7 +312,6 @@ static t_Error CheckInitParameters(t_FmPort *p_FmPort)
                 MAJOR,
                 E_INVALID_VALUE,
                 ("For Offline port, openDmas.num can't be smaller than %d", MIN_NUM_OF_OP_DMAS));
-#endif /* FM_OP_OPEN_DMA_MIN_LIMIT */
 
     /****************************************/
     /*   Offline & HC Ports                 */
@@ -334,20 +319,7 @@ static t_Error CheckInitParameters(t_FmPort *p_FmPort)
     if ((p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
             || (p_FmPort->portType == e_FM_PORT_TYPE_OH_HOST_COMMAND))
     {
-#ifndef FM_FRAME_END_PARAMS_FOR_OP
-        if ((p_FmPort->fmRevInfo.majorRev < 6) &&
-                (p_FmPort->p_FmPortDriverParam->cheksumLastBytesIgnore != DEFAULT_notSupported))
-        /* this is an indication that user called config for this mode which is not supported in this integration */
-        RETURN_ERROR(MAJOR, E_NOT_SUPPORTED, ("cheksumLastBytesIgnore is available for Rx & Tx ports only"));
-#endif /* !FM_FRAME_END_PARAMS_FOR_OP */
 
-#ifndef FM_DEQ_PIPELINE_PARAMS_FOR_OP
-        if ((!((p_FmPort->fmRevInfo.majorRev == 4) ||
-                                (p_FmPort->fmRevInfo.majorRev >= 6))) &&
-                (p_FmPort->p_FmPortDriverParam->dfltCfg.tx_fifo_deq_pipeline_depth != DEFAULT_notSupported))
-        /* this is an indication that user called config for this mode which is not supported in this integration */
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION, ("fifoDeqPipelineDepth is available for Tx ports only"));
-#endif /* !FM_DEQ_PIPELINE_PARAMS_FOR_OP */
     }
 
     /****************************************/
@@ -399,12 +371,6 @@ static t_Error CheckInitParameters(t_FmPort *p_FmPort)
                 MAJOR, E_INVALID_VALUE,
                 ("fifoBufs.num has to be divisible by %d", BMI_FIFO_UNITS));
 
-#ifdef FM_QMI_NO_DEQ_OPTIONS_SUPPORT
-    if (p_FmPort->fmRevInfo.majorRev == 4)
-    if (p_FmPort->p_FmPortDriverParam->deqPrefetchOption != DEFAULT_notSupported)
-    /* this is an indication that user called config for this mode which is not supported in this integration */
-    RETURN_ERROR(MAJOR, E_INVALID_OPERATION, ("deqPrefetchOption"));
-#endif /* FM_QMI_NO_DEQ_OPTIONS_SUPPORT */
 
     return E_OK;
 }
@@ -412,6 +378,9 @@ static t_Error CheckInitParameters(t_FmPort *p_FmPort)
 static t_Error VerifySizeOfFifo(t_FmPort *p_FmPort)
 {
     uint32_t minFifoSizeRequired = 0, optFifoSizeForB2B = 0;
+    /* Called only from FM_PORT_Init(), which the port's initialization
+     * parameters outlive. */
+    uint8_t deqDepth = p_FmPort->p_FmPortDriverParam->dfltCfg.tx_fifo_deq_pipeline_depth;
 
     /*************************/
     /*    TX PORTS           */
@@ -424,8 +393,7 @@ static t_Error VerifySizeOfFifo(t_FmPort *p_FmPort)
                         + (3 * BMI_FIFO_UNITS));
         if (!p_FmPort->imEn)
             minFifoSizeRequired +=
-                    p_FmPort->p_FmPortDriverParam->dfltCfg.tx_fifo_deq_pipeline_depth
-                            * BMI_FIFO_UNITS;
+                    deqDepth * BMI_FIFO_UNITS;
 
         optFifoSizeForB2B = minFifoSizeRequired;
 
@@ -496,8 +464,7 @@ static t_Error VerifySizeOfFifo(t_FmPort *p_FmPort)
                     optFifoSizeForB2B =
                             minFifoSizeRequired =
                                     (uint32_t)(ROUND_UP(p_FmPort->maxFrameLength, BMI_FIFO_UNITS)
-                                            + ((p_FmPort->p_FmPortDriverParam->dfltCfg.tx_fifo_deq_pipeline_depth
-                                                    + 5) * BMI_FIFO_UNITS));
+                                            + ((deqDepth + 5) * BMI_FIFO_UNITS));
                     /* 4 according to spec + 1 for FOF>0 */
                 }
 
@@ -633,16 +600,6 @@ static t_Error SetExtBufferPools(t_FmPort *p_FmPort)
     return E_OK;
 }
 
-static t_Error ClearPerfCnts(t_FmPort *p_FmPort)
-{
-    if (p_FmPort->portType != e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
-        FM_PORT_ModifyCounter(p_FmPort, e_FM_PORT_COUNTERS_QUEUE_UTIL, 0);
-    FM_PORT_ModifyCounter(p_FmPort, e_FM_PORT_COUNTERS_TASK_UTIL, 0);
-    FM_PORT_ModifyCounter(p_FmPort, e_FM_PORT_COUNTERS_DMA_UTIL, 0);
-    FM_PORT_ModifyCounter(p_FmPort, e_FM_PORT_COUNTERS_FIFO_UTIL, 0);
-    return E_OK;
-}
-
 static t_Error InitLowLevelDriver(t_FmPort *p_FmPort)
 {
     t_FmPortDriverParam *p_DriverParams = p_FmPort->p_FmPortDriverParam;
@@ -662,7 +619,8 @@ static t_Error InitLowLevelDriver(t_FmPort *p_FmPort)
     {
         case (e_FM_PORT_TYPE_RX_10G):
         case (e_FM_PORT_TYPE_RX):
-            portParams.err_mask = (RX_ERRS_TO_ENQ & ~portParams.discard_mask);
+	    //not required to enqueue error frames
+            portParams.err_mask = 0;
             if (!p_FmPort->imEn)
             {
                 if (p_DriverParams->forwardReuseIntContext)
@@ -819,6 +777,7 @@ static bool CheckOhBmiCounter(t_FmPort *p_FmPort, e_FmPortCounters counter)
         case (e_FM_PORT_COUNTERS_LENGTH_ERR):
         case (e_FM_PORT_COUNTERS_UNSUPPRTED_FORMAT):
         case (e_FM_PORT_COUNTERS_DEALLOC_BUF):
+        case (e_FM_PORT_COUNTERS_RX_OUT_OF_BUFFERS_DISCARD):
             return TRUE;
         case (e_FM_PORT_COUNTERS_RX_FILTER_FRAME):
             if (p_FmPort->portType == e_FM_PORT_TYPE_OH_HOST_COMMAND)
@@ -1093,7 +1052,10 @@ static void FmPortCheckNApplyMacsec(t_Handle h_FmPort)
     }
 }
 
-static t_Error SetPcd(t_FmPort *p_FmPort, t_FmPortPcdParams *p_PcdParams)
+static t_Error DeletePcd(t_FmPort *p_FmPort);
+
+static t_Error ConfigurePcd(t_FmPort *p_FmPort, t_FmPortPcdParams *p_PcdParams,
+                           struct fm_port_pcd_bindings *bindings)
 {
     t_Error err = E_OK;
     uint32_t tmpReg;
@@ -1184,14 +1146,6 @@ static t_Error SetPcd(t_FmPort *p_FmPort, t_FmPortPcdParams *p_PcdParams)
             RETURN_ERROR(MAJOR, E_INVALID_STATE, ("invalid pcdSupport"));
     }
 
-    if ((p_FmPort->pcdEngines & FM_PCD_PRS)
-            && (p_PcdParams->p_PrsParams->numOfHdrsWithAdditionalParams
-                    > FM_PCD_PRS_NUM_OF_HDRS))
-        RETURN_ERROR(
-                MAJOR,
-                E_INVALID_VALUE,
-                ("Port parser numOfHdrsWithAdditionalParams may not exceed %d", FM_PCD_PRS_NUM_OF_HDRS));
-
     /* check that parameters exist for each and only each defined engine */
     if ((!!(p_FmPort->pcdEngines & FM_PCD_PRS) != !!p_PcdParams->p_PrsParams)
             || (!!(p_FmPort->pcdEngines & FM_PCD_KG)
@@ -1202,6 +1156,14 @@ static t_Error SetPcd(t_FmPort *p_FmPort, t_FmPortPcdParams *p_PcdParams)
                 MAJOR,
                 E_INVALID_STATE,
                 ("PCD initialization structure is not consistent with pcdSupport"));
+
+    if ((p_FmPort->pcdEngines & FM_PCD_PRS)
+            && (p_PcdParams->p_PrsParams->numOfHdrsWithAdditionalParams
+                    > FM_PCD_PRS_NUM_OF_HDRS))
+        RETURN_ERROR(
+                MAJOR,
+                E_INVALID_VALUE,
+                ("Port parser numOfHdrsWithAdditionalParams may not exceed %d", FM_PCD_PRS_NUM_OF_HDRS));
 
     /* get PCD registers pointers */
     switch (p_FmPort->portType)
@@ -1236,6 +1198,7 @@ static t_Error SetPcd(t_FmPort *p_FmPort, t_FmPortPcdParams *p_PcdParams)
 
         WRITE_UINT32(*p_BmiCcBase, ccTreePhysOffset);
         p_FmPort->ccTreeId = p_PcdParams->p_CcParams->h_CcTree;
+        bindings->cc = TRUE;
     }
 
     if (p_FmPort->pcdEngines & FM_PCD_KG)
@@ -1256,6 +1219,7 @@ static t_Error SetPcd(t_FmPort *p_FmPort, t_FmPortPcdParams *p_PcdParams)
             RETURN_ERROR(MAJOR, E_INVALID_VALUE,
                          ("FmPcdKgSetOrBindToClsPlanGrp failed. "));
 
+        bindings->clsPlan = TRUE;
         p_FmPort->useClsPlan = !isEmptyClsPlanGrp;
 
         schemeBind.netEnvId = p_FmPort->netEnvId;
@@ -1284,6 +1248,7 @@ static t_Error SetPcd(t_FmPort *p_FmPort, t_FmPortPcdParams *p_PcdParams)
         err = FmPcdKgBindPortToSchemes(p_FmPort->h_FmPcd, &schemeBind);
         if (err)
             RETURN_ERROR(MAJOR, err, NO_MSG);
+        bindings->schemes = TRUE;
     }
 
     /***************************/
@@ -1524,30 +1489,20 @@ static t_Error SetPcd(t_FmPort *p_FmPort, t_FmPortPcdParams *p_PcdParams)
                 RETURN_ERROR(MAJOR, E_INVALID_VALUE, NO_MSG);
         }
 
-        /* Check if ip-reassembly port - need to link sw-parser code */
-        if (p_FmPort->h_IpReassemblyManip)
+        if (FmPcdNetEnvIsHdrExist(p_FmPort->h_FmPcd, p_FmPort->netEnvId, HEADER_TYPE_UDP_LITE))
         {
-           /* link to sw parser code for IP Frag - only if no other code is applied. */
-            hdrNum = GetPrsHdrNum(HEADER_TYPE_IPv4);
-            if (!(tmpHxs[hdrNum] & PRS_HDR_SW_PRS_EN))
-                tmpHxs[hdrNum] |= (PRS_HDR_SW_PRS_EN | OFFLOAD_SW_PATCH_IPv4_IPR_LABEL);
             hdrNum = GetPrsHdrNum(HEADER_TYPE_IPv6);
             if (!(tmpHxs[hdrNum] & PRS_HDR_SW_PRS_EN))
-                tmpHxs[hdrNum] |= (PRS_HDR_SW_PRS_EN | OFFLOAD_SW_PATCH_IPv6_IPR_LABEL);
-        } else {
-            if (FmPcdNetEnvIsHdrExist(p_FmPort->h_FmPcd, p_FmPort->netEnvId, HEADER_TYPE_UDP_LITE))
+                tmpHxs[hdrNum] |= (PRS_HDR_SW_PRS_EN | OFFLOAD_SW_PATCH_IPv6_IPF_LABEL);
+        } else if ((FmPcdIsAdvancedOffloadSupported(p_FmPort->h_FmPcd)
+                   && (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING)))
             {
                 hdrNum = GetPrsHdrNum(HEADER_TYPE_IPv6);
                 if (!(tmpHxs[hdrNum] & PRS_HDR_SW_PRS_EN))
                     tmpHxs[hdrNum] |= (PRS_HDR_SW_PRS_EN | OFFLOAD_SW_PATCH_IPv6_IPF_LABEL);
-            } else if ((FmPcdIsAdvancedOffloadSupported(p_FmPort->h_FmPcd)
-                       && (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING)))
-                {
-                    hdrNum = GetPrsHdrNum(HEADER_TYPE_IPv6);
-                    if (!(tmpHxs[hdrNum] & PRS_HDR_SW_PRS_EN))
-                        tmpHxs[hdrNum] |= (PRS_HDR_SW_PRS_EN | OFFLOAD_SW_PATCH_IPv6_IPF_LABEL);
-                }
             }
+
+
 
         for (i = 0; i < FM_PCD_PRS_NUM_OF_HDRS; i++)
         {
@@ -1621,6 +1576,24 @@ static t_Error SetPcd(t_FmPort *p_FmPort, t_FmPortPcdParams *p_PcdParams)
     return E_OK;
 }
 
+/* Keep any bindings whose rollback failed so the public API can retry. */
+static t_Error SetPcd(t_FmPort *p_FmPort, t_FmPortPcdParams *p_PcdParams)
+{
+    t_Error err, cleanupErr;
+
+    if (p_FmPort->pcdEngines)
+        RETURN_ERROR(MAJOR, E_INVALID_STATE, ("PCD is already configured"));
+
+    err = ConfigurePcd(p_FmPort, p_PcdParams, &p_FmPort->pcdBindings);
+    if (err && p_FmPort->pcdEngines)
+    {
+        cleanupErr = DeletePcd(p_FmPort);
+        if (cleanupErr)
+            REPORT_ERROR(MAJOR, cleanupErr, ("Failed to roll back port PCD bindings"));
+    }
+    return err;
+}
+
 static t_Error DeletePcd(t_FmPort *p_FmPort)
 {
     t_Error err = E_OK;
@@ -1641,7 +1614,7 @@ static t_Error DeletePcd(t_FmPort *p_FmPort)
                      ("available for Rx and offline parsing ports only"));
 
     if (!p_FmPort->pcdEngines)
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION, ("called for non PCD port"));
+        return E_OK;
 
     /* get PCD registers pointers */
     switch (p_FmPort->portType)
@@ -1678,34 +1651,47 @@ static t_Error DeletePcd(t_FmPort *p_FmPort)
             ;
     }
 
-    if (p_FmPort->pcdEngines & FM_PCD_KG)
+    if (p_FmPort->includeInPrsStatistics)
+    {
+        err = FmPcdPrsIncludePortInStatistics(p_FmPort->h_FmPcd,
+                                             p_FmPort->hardwarePortId, FALSE);
+        if (err)
+            return err;
+        p_FmPort->includeInPrsStatistics = FALSE;
+    }
+
+    if (p_FmPort->pcdBindings.schemes)
     {
         t_FmPcdKgInterModuleBindPortToSchemes schemeBind;
 
-        /* unbind all schemes */
-        p_FmPort->schemesPerPortVector = GetPortSchemeBindParams(p_FmPort,
-                                                                 &schemeBind);
-
+        GetPortSchemeBindParams(p_FmPort, &schemeBind);
         err = FmPcdKgUnbindPortToSchemes(p_FmPort->h_FmPcd, &schemeBind);
         if (err)
-            RETURN_ERROR(MAJOR, err, NO_MSG);
-
+            return err;
+        p_FmPort->pcdBindings.schemes = FALSE;
+        p_FmPort->schemesPerPortVector = 0;
+    }
+    if (p_FmPort->pcdBindings.clsPlan)
+    {
         err = FmPcdKgDeleteOrUnbindPortToClsPlanGrp(p_FmPort->h_FmPcd,
-                                                    p_FmPort->hardwarePortId,
-                                                    p_FmPort->clsPlanGrpId);
+                                p_FmPort->hardwarePortId, p_FmPort->clsPlanGrpId);
         if (err)
-            RETURN_ERROR(MAJOR, err, NO_MSG);
+            return err;
+        p_FmPort->pcdBindings.clsPlan = FALSE;
         p_FmPort->useClsPlan = FALSE;
     }
-
-    if (p_FmPort->pcdEngines & FM_PCD_CC)
+    if (p_FmPort->pcdBindings.cc)
     {
-        /* unbind - we need to get the treeId too */
         err = FmPcdCcUnbindTree(p_FmPort->h_FmPcd, p_FmPort->ccTreeId);
         if (err)
-            RETURN_ERROR(MAJOR, err, NO_MSG);
+            return err;
+        p_FmPort->pcdBindings.cc = FALSE;
+        p_FmPort->ccTreeId = NULL;
     }
 
+    p_FmPort->schemesPerPortVector = 0;
+    p_FmPort->useClsPlan = FALSE;
+    memset(p_FmPort->optArray, 0, sizeof(p_FmPort->optArray));
     p_FmPort->pcdEngines = 0;
 
     return E_OK;
@@ -1789,7 +1775,9 @@ static t_Error AttachPCD(t_FmPort *p_FmPort)
     return E_OK;
 }
 
-static t_Error DetachPCD(t_FmPort *p_FmPort)
+/* The first half of a detach: new frames go straight to the port's default
+ * queue rather than to its PCD. */
+static void DetachPCDEntry(t_FmPort *p_FmPort)
 {
     volatile uint32_t *p_BmiNia = NULL;
 
@@ -1808,10 +1796,12 @@ static t_Error DetachPCD(t_FmPort *p_FmPort)
     WRITE_UINT32(
             *p_BmiNia,
             (p_FmPort->savedBmiNia & BMI_RFNE_FDCS_MASK) | GET_NO_PCD_NIA_BMI_AC_ENQ_FRAME());
+}
 
-    if (FmPcdIsHcUsageAllowed(p_FmPort->h_FmPcd))
-        FmPcdHcSync(p_FmPort->h_FmPcd);
-
+/* The second half: what a frame does once the PCD would have handed it back,
+ * which frames the PCD already had still need until they are done. */
+static t_Error DetachPCDActions(t_FmPort *p_FmPort)
+{
     if (p_FmPort->requiredAction & UPDATE_NIA_FENE)
     {
         if (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
@@ -1831,52 +1821,35 @@ static t_Error DetachPCD(t_FmPort *p_FmPort)
                                    p_FmPort->orFmanCtrl) != E_OK)
             RETURN_ERROR(MAJOR, E_INVALID_STATE, NO_MSG);
 
-    p_FmPort->requiredAction = 0;
-
     return E_OK;
 }
 
-/*****************************************************************************/
-/*              Inter-module API routines                                    */
-/*****************************************************************************/
-void FmPortSetMacsecCmd(t_Handle h_FmPort, uint8_t dfltSci)
+static t_Error DetachPCD(t_FmPort *p_FmPort)
 {
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    volatile uint32_t *p_BmiCfgReg = NULL;
-    uint32_t tmpReg;
+    t_Error err;
 
-    SANITY_CHECK_RETURN(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN(p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
+    DetachPCDEntry(p_FmPort);
 
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_TX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_TX))
+    if (FmPcdIsHcUsageAllowed(p_FmPort->h_FmPcd))
     {
-        REPORT_ERROR(MAJOR, E_INVALID_OPERATION, ("The routine is relevant for Tx ports only"));
-        return;
+        err = FmPcdHcSync(p_FmPort->h_FmPcd);
+        if (err)
+            return err;
     }
 
-    p_BmiCfgReg = &p_FmPort->port.bmi_regs->tx.fmbm_tfca;
-    tmpReg = GET_UINT32(*p_BmiCfgReg) & ~BMI_CMD_ATTR_MACCMD_MASK;
-    tmpReg |= BMI_CMD_ATTR_MACCMD_SECURED;
-    tmpReg |= (((uint32_t)dfltSci << BMI_CMD_ATTR_MACCMD_SC_SHIFT)
-            & BMI_CMD_ATTR_MACCMD_SC_MASK);
+    err = DetachPCDActions(p_FmPort);
+    if (err)
+        return err;
 
-    WRITE_UINT32(*p_BmiCfgReg, tmpReg);
-}
+    p_FmPort->requiredAction = 0;
+    p_FmPort->pcdBypassed = FALSE;
 
-uint8_t FmPortGetNetEnvId(t_Handle h_FmPort)
-{
-    return ((t_FmPort*)h_FmPort)->netEnvId;
+    return E_OK;
 }
 
 uint8_t FmPortGetHardwarePortId(t_Handle h_FmPort)
 {
     return ((t_FmPort*)h_FmPort)->hardwarePortId;
-}
-
-uint32_t FmPortGetPcdEngines(t_Handle h_FmPort)
-{
-    return ((t_FmPort*)h_FmPort)->pcdEngines;
 }
 
 t_Error FmPortSetGprFunc(t_Handle h_FmPort, e_FmPortGprFuncType gprFunc,
@@ -2154,6 +2127,7 @@ t_Error FmPortGetSetCcParams(t_Handle h_FmPort,
 
     return E_OK;
 }
+
 /*********************** End of inter-module routines ************************/
 
 /****************************************/
@@ -2227,11 +2201,7 @@ t_Handle FM_PORT_Config(t_FmPortParams *p_FmPortParams)
     p_FmPort->p_FmPortDriverParam->dfltCfg.rx_fifo_thr =
             DEFAULT_PORT_rxFifoThreshold;
 
-#if defined(FM_OP_NO_VSP_NO_RELEASE_ERRATA_FMAN_A006675) || defined(FM_ERROR_VSP_NO_MATCH_SW006)
     p_FmPort->p_FmPortDriverParam->dfltCfg.errata_A006675 = TRUE;
-#else
-    p_FmPort->p_FmPortDriverParam->dfltCfg.errata_A006675 = FALSE;
-#endif
     if ((p_FmPort->fmRevInfo.majorRev == 6)
             && (p_FmPort->fmRevInfo.minorRev == 0))
         p_FmPort->p_FmPortDriverParam->dfltCfg.errata_A006320 = TRUE;
@@ -2241,10 +2211,8 @@ t_Handle FM_PORT_Config(t_FmPortParams *p_FmPortParams)
     /* Excessive Threshold register - exists for pre-FMv3 chips only */
     if (p_FmPort->fmRevInfo.majorRev < 6)
     {
-#ifdef FM_NO_RESTRICT_ON_ACCESS_RSRC
         p_FmPort->p_FmPortDriverParam->dfltCfg.excessive_threshold_register =
                 TRUE;
-#endif
         p_FmPort->p_FmPortDriverParam->dfltCfg.fmbm_rebm_has_sgd = FALSE;
         p_FmPort->p_FmPortDriverParam->dfltCfg.fmbm_tfne_has_features = FALSE;
     }
@@ -2303,7 +2271,6 @@ t_Handle FM_PORT_Config(t_FmPortParams *p_FmPortParams)
 	p_FmPort->tasks.extra = DEFAULT_PORT_extraNumOfTasks(p_FmPort->portType);
 
 
-#ifdef FM_HEAVY_TRAFFIC_SEQUENCER_HANG_ERRATA_FMAN_A006981
     if ((p_FmPort->fmRevInfo.majorRev == 6)
             && (p_FmPort->fmRevInfo.minorRev == 0)
             && ((p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
@@ -2312,7 +2279,6 @@ t_Handle FM_PORT_Config(t_FmPortParams *p_FmPortParams)
         p_FmPort->openDmas.num = 16;
         p_FmPort->openDmas.extra = 0;
     }
-#endif /* FM_HEAVY_TRAFFIC_SEQUENCER_HANG_ERRATA_FMAN_A006981 */
 
     /* Port type specific initialization: */
     switch (p_FmPort->portType)
@@ -2348,11 +2314,9 @@ t_Handle FM_PORT_Config(t_FmPortParams *p_FmPortParams)
 
         case (e_FM_PORT_TYPE_TX):
             p_FmPort->p_FmPortDriverParam->dontReleaseBuf = FALSE;
-#ifdef FM_WRONG_RESET_VALUES_ERRATA_FMAN_A005127
             tmpReg = 0x00001013;
             WRITE_UINT32( p_FmPort->p_FmPortBmiRegs->txPortBmiRegs.fmbm_tfp,
                          tmpReg);
-#endif /* FM_WRONG_RESET_VALUES_ERRATA_FMAN_A005127 */
 
             fallthrough;
         case (e_FM_PORT_TYPE_TX_10G):
@@ -2407,16 +2371,7 @@ t_Handle FM_PORT_Config(t_FmPortParams *p_FmPortParams)
 					DEFAULT_PORT_fifoDeqPipelineDepth_OH;
                 }
 
-#ifndef FM_FRAME_END_PARAMS_FOR_OP
-            if (p_FmPort->fmRevInfo.majorRev < 6)
-            p_FmPort->p_FmPortDriverParam->cheksumLastBytesIgnore = DEFAULT_notSupported;
-#endif /* !FM_FRAME_END_PARAMS_FOR_OP */
 
-#ifndef FM_DEQ_PIPELINE_PARAMS_FOR_OP
-            if (!((p_FmPort->fmRevInfo.majorRev == 4) ||
-                            (p_FmPort->fmRevInfo.majorRev >= 6)))
-            p_FmPort->p_FmPortDriverParam->dfltCfg.tx_fifo_deq_pipeline_depth = DEFAULT_notSupported;
-#endif /* !FM_DEQ_PIPELINE_PARAMS_FOR_OP */
             break;
 
         default:
@@ -2425,10 +2380,6 @@ t_Handle FM_PORT_Config(t_FmPortParams *p_FmPortParams)
             REPORT_ERROR(MAJOR, E_INVALID_STATE, ("Invalid port type"));
             return NULL;
     }
-#ifdef FM_QMI_NO_DEQ_OPTIONS_SUPPORT
-    if (p_FmPort->fmRevInfo.majorRev == 4)
-    p_FmPort->p_FmPortDriverParam->deqPrefetchOption = (e_FmPortDeqPrefetchOption)DEFAULT_notSupported;
-#endif /* FM_QMI_NO_DEQ_OPTIONS_SUPPORT */
 
     p_FmPort->imEn = p_FmPortParams->independentModeEnable;
 
@@ -2468,6 +2419,8 @@ t_Handle FM_PORT_Config(t_FmPortParams *p_FmPortParams)
                                 & QMI_DEQ_CFG_SUBPORTAL_MASK);
                 p_FmPort->p_FmPortDriverParam->dfltFqid =
                         p_FmPortParams->specificParams.nonRxParams.dfltFqid;
+                p_FmPort->p_FmPortDriverParam->liodnOffset =
+                        p_FmPortParams->specificParams.nonRxParams.liodnOffset;
                 break;
             default:
                 XX_Free(p_FmPort->p_FmPortDriverParam);
@@ -2531,6 +2484,9 @@ t_Error FM_PORT_Init(t_Handle h_FmPort)
 
     SANITY_CHECK_RETURN_ERROR(h_FmPort, E_INVALID_HANDLE);
     SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
+    if (p_FmPort->fmPortParamsAllocated)
+        RETURN_ERROR(MAJOR, E_INVALID_STATE,
+                     ("Port resources already allocated; free the failed port before retrying."));
 
     errCode = FmSpBuildBufferStructure(
             &p_FmPort->p_FmPortDriverParam->intContext,
@@ -2539,7 +2495,6 @@ t_Error FM_PORT_Init(t_Handle h_FmPort)
             &p_FmPort->bufferOffsets, &p_FmPort->internalBufferOffset);
     if (errCode != E_OK)
         RETURN_ERROR(MAJOR, errCode, NO_MSG);
-#ifdef FM_HEAVY_TRAFFIC_HANG_ERRATA_FMAN_A005669
     if ((p_FmPort->p_FmPortDriverParam->bcbWorkaround) &&
             (p_FmPort->portType == e_FM_PORT_TYPE_RX))
     {
@@ -2548,7 +2503,6 @@ t_Error FM_PORT_Init(t_Handle h_FmPort)
         p_FmPort->fifoBufs.num = DEFAULT_PORT_numOfFifoBufs(p_FmPort->portType)*BMI_FIFO_UNITS;
         p_FmPort->fifoBufs.num += 4*KILOBYTE;
     }
-#endif /* FM_HEAVY_TRAFFIC_HANG_ERRATA_FMAN_A005669 */
 
     CHECK_INIT_PARAMETERS(p_FmPort, CheckInitParameters);
 
@@ -2590,12 +2544,10 @@ t_Error FM_PORT_Init(t_Handle h_FmPort)
     if (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
     {
         {
-#ifdef FM_NO_OP_OBSERVED_POOLS
             t_FmRevisionInfo revInfo;
 
             FM_GetRevision(p_FmPort->h_Fm, &revInfo);
             if ((revInfo.majorRev == 4) && (p_DriverParams->enBufPoolDepletion))
-#endif /* FM_NO_OP_OBSERVED_POOLS */
             {
                 /* define external buffer pools */
                 errCode = SetExtBufferPools(p_FmPort);
@@ -2630,22 +2582,15 @@ t_Error FM_PORT_Init(t_Handle h_FmPort)
     fmParams.deqPipelineDepth =
             p_FmPort->p_FmPortDriverParam->dfltCfg.tx_fifo_deq_pipeline_depth;
     fmParams.maxFrameLength = p_FmPort->maxFrameLength;
-#ifndef FM_DEQ_PIPELINE_PARAMS_FOR_OP
-    if ((p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING) ||
-            (p_FmPort->portType == e_FM_PORT_TYPE_OH_HOST_COMMAND))
-    {
-        if (!((p_FmPort->fmRevInfo.majorRev == 4) ||
-                        (p_FmPort->fmRevInfo.majorRev >= 6)))
-        /* HC ports do not have fifoDeqPipelineDepth, but it is needed only
-         * for deq threshold calculation.
-         */
-        fmParams.deqPipelineDepth = 2;
-    }
-#endif /* !FM_DEQ_PIPELINE_PARAMS_FOR_OP */
 
     errCode = FmGetSetPortParams(p_FmPort->h_Fm, &fmParams);
     if (errCode)
         RETURN_ERROR(MAJOR, errCode, NO_MSG);
+
+    /* Keep the charged depth, including the revision override, after the
+     * initialization parameters are freed or low-level initialization fails. */
+    p_FmPort->deqPipelineDepth = fmParams.deqPipelineDepth;
+    p_FmPort->fmPortParamsAllocated = TRUE;
 
     /* get params for use in init */
     p_FmPort->fmMuramPhysBaseAddr =
@@ -2670,7 +2615,6 @@ t_Error FM_PORT_Init(t_Handle h_FmPort)
         ASSERT_COND(p_ParamsPage);
 
         WRITE_UINT32(p_ParamsPage->misc, FM_CTL_PARAMS_PAGE_ALWAYS_ON);
-#ifdef FM_OP_NO_VSP_NO_RELEASE_ERRATA_FMAN_A006675
         if (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
         {
             WRITE_UINT32(
@@ -2680,8 +2624,6 @@ t_Error FM_PORT_Init(t_Handle h_FmPort)
                     p_ParamsPage->discardMask,
                     GET_UINT32(p_FmPort->p_FmPortBmiRegs->ohPortBmiRegs.fmbm_ofsdm));
         }
-#endif /* FM_OP_NO_VSP_NO_RELEASE_ERRATA_FMAN_A006675 */
-#ifdef FM_ERROR_VSP_NO_MATCH_SW006
         if (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
             WRITE_UINT32(
                     p_ParamsPage->errorsDiscardMask,
@@ -2690,7 +2632,6 @@ t_Error FM_PORT_Init(t_Handle h_FmPort)
             WRITE_UINT32(
                     p_ParamsPage->errorsDiscardMask,
                     (GET_UINT32(p_FmPort->p_FmPortBmiRegs->rxPortBmiRegs.fmbm_rfsdm) | GET_UINT32(p_FmPort->p_FmPortBmiRegs->rxPortBmiRegs.fmbm_rfsem)));
-#endif /* FM_ERROR_VSP_NO_MATCH_SW006 */
     }
 
     return E_OK;
@@ -2714,7 +2655,7 @@ t_Error FM_PORT_Free(t_Handle h_FmPort)
 
     SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
 
-    if (p_FmPort->pcdEngines)
+    if (p_FmPort->pcdEngines || p_FmPort->pcdNetEnvOwner)
         RETURN_ERROR(
                 MAJOR,
                 E_INVALID_STATE,
@@ -2731,13 +2672,16 @@ t_Error FM_PORT_Free(t_Handle h_FmPort)
 
     FmPortDriverParamFree(p_FmPort);
 
-    memset(&fmParams, 0, sizeof(fmParams));
-    fmParams.hardwarePortId = p_FmPort->hardwarePortId;
-    fmParams.portType = (e_FmPortType)p_FmPort->portType;
-    fmParams.deqPipelineDepth =
-            p_FmPort->p_FmPortDriverParam->dfltCfg.tx_fifo_deq_pipeline_depth;
+    if (p_FmPort->fmPortParamsAllocated)
+    {
+        memset(&fmParams, 0, sizeof(fmParams));
+        fmParams.hardwarePortId = p_FmPort->hardwarePortId;
+        fmParams.portType = (e_FmPortType)p_FmPort->portType;
+        fmParams.deqPipelineDepth = p_FmPort->deqPipelineDepth;
 
-    FmFreePortParams(p_FmPort->h_Fm, &fmParams);
+        FmFreePortParams(p_FmPort->h_Fm, &fmParams);
+        p_FmPort->fmPortParamsAllocated = FALSE;
+    }
 
     if (FmVSPFreeForPort(p_FmPort->h_Fm, p_FmPort->portType, p_FmPort->portId)
             != E_OK)
@@ -2811,23 +2755,6 @@ t_Error FM_PORT_ConfigDeqHighPriority(t_Handle h_FmPort, bool highPri)
     return E_OK;
 }
 
-t_Error FM_PORT_ConfigDeqType(t_Handle h_FmPort, e_FmPortDeqType deqType)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    if ((p_FmPort->portType == e_FM_PORT_TYPE_RX_10G)
-            || (p_FmPort->portType == e_FM_PORT_TYPE_RX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("not available for Rx ports"));
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.deq_type =
-            (enum fman_port_deq_type)deqType;
-
-    return E_OK;
-}
-
 t_Error FM_PORT_ConfigDeqPrefetchOption(
         t_Handle h_FmPort, e_FmPortDeqPrefetchOption deqPrefetchOption)
 {
@@ -2841,44 +2768,6 @@ t_Error FM_PORT_ConfigDeqPrefetchOption(
                      ("not available for Rx ports"));
     p_FmPort->p_FmPortDriverParam->dfltCfg.deq_prefetch_opt =
             (enum fman_port_deq_prefetch)deqPrefetchOption;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigBackupPools(t_Handle h_FmPort,
-                                  t_FmBackupBmPools *p_BackupBmPools)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_RX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for Rx ports only"));
-
-    p_FmPort->p_FmPortDriverParam->p_BackupBmPools =
-            (t_FmBackupBmPools *)XX_Malloc(sizeof(t_FmBackupBmPools));
-    if (!p_FmPort->p_FmPortDriverParam->p_BackupBmPools)
-        RETURN_ERROR(MAJOR, E_NO_MEMORY, ("p_BackupBmPools allocation failed"));
-    memcpy(p_FmPort->p_FmPortDriverParam->p_BackupBmPools, p_BackupBmPools,
-           sizeof(t_FmBackupBmPools));
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigDeqByteCnt(t_Handle h_FmPort, uint16_t deqByteCnt)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    if ((p_FmPort->portType == e_FM_PORT_TYPE_RX_10G)
-            || (p_FmPort->portType == e_FM_PORT_TYPE_RX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("not available for Rx ports"));
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.deq_byte_cnt = deqByteCnt;
 
     return E_OK;
 }
@@ -2901,79 +2790,6 @@ t_Error FM_PORT_ConfigBufferPrefixContent(
     return E_OK;
 }
 
-t_Error FM_PORT_ConfigCheksumLastBytesIgnore(t_Handle h_FmPort,
-                                             uint8_t checksumLastBytesIgnore)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.checksum_bytes_ignore =
-            checksumLastBytesIgnore;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigCutBytesFromEnd(t_Handle h_FmPort,
-                                      uint8_t cutBytesFromEnd)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_RX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for Rx ports only"));
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.rx_cut_end_bytes = cutBytesFromEnd;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigPoolDepletion(t_Handle h_FmPort,
-                                    t_FmBufPoolDepletion *p_BufPoolDepletion)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_RX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for Rx ports only"));
-
-    p_FmPort->p_FmPortDriverParam->enBufPoolDepletion = TRUE;
-    memcpy(&p_FmPort->p_FmPortDriverParam->bufPoolDepletion, p_BufPoolDepletion,
-           sizeof(t_FmBufPoolDepletion));
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigObservedPoolDepletion(
-        t_Handle h_FmPort,
-        t_FmPortObservedBufPoolDepletion *p_FmPortObservedBufPoolDepletion)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    if (p_FmPort->portType != e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for OP ports only"));
-
-    p_FmPort->p_FmPortDriverParam->enBufPoolDepletion = TRUE;
-    memcpy(&p_FmPort->p_FmPortDriverParam->bufPoolDepletion,
-           &p_FmPortObservedBufPoolDepletion->poolDepletionParams,
-           sizeof(t_FmBufPoolDepletion));
-    memcpy(&p_FmPort->p_FmPortDriverParam->extBufPools,
-           &p_FmPortObservedBufPoolDepletion->poolsParams,
-           sizeof(t_FmExtPools));
-
-    return E_OK;
-}
-
 t_Error FM_PORT_ConfigExtBufPools(t_Handle h_FmPort, t_FmExtPools *p_FmExtPools)
 {
     t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
@@ -2987,66 +2803,6 @@ t_Error FM_PORT_ConfigExtBufPools(t_Handle h_FmPort, t_FmExtPools *p_FmExtPools)
 
     memcpy(&p_FmPort->p_FmPortDriverParam->extBufPools, p_FmExtPools,
            sizeof(t_FmExtPools));
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigDontReleaseTxBufToBM(t_Handle h_FmPort)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_TX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_TX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for Tx ports only"));
-
-    p_FmPort->p_FmPortDriverParam->dontReleaseBuf = TRUE;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigDfltColor(t_Handle h_FmPort, e_FmPortColor color)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    p_FmPort->p_FmPortDriverParam->dfltCfg.color = (enum fman_port_color)color;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigSyncReq(t_Handle h_FmPort, bool syncReq)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    if ((p_FmPort->portType == e_FM_PORT_TYPE_TX_10G)
-            || (p_FmPort->portType == e_FM_PORT_TYPE_TX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("Not available for Tx ports"));
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.sync_req = syncReq;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigFrmDiscardOverride(t_Handle h_FmPort, bool override)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    if ((p_FmPort->portType == e_FM_PORT_TYPE_TX_10G)
-            || (p_FmPort->portType == e_FM_PORT_TYPE_TX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("Not available for Tx ports"));
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.discard_override = override;
 
     return E_OK;
 }
@@ -3069,111 +2825,6 @@ t_Error FM_PORT_ConfigErrorsToDiscard(t_Handle h_FmPort,
     return E_OK;
 }
 
-t_Error FM_PORT_ConfigDmaSwapData(t_Handle h_FmPort, e_FmDmaSwapOption swapData)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.dma_swap_data =
-            (enum fman_port_dma_swap)swapData;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigDmaIcCacheAttr(t_Handle h_FmPort,
-                                     e_FmDmaCacheOption intContextCacheAttr)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.dma_ic_stash_on =
-            (bool)(intContextCacheAttr == e_FM_DMA_STASH);
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigDmaHdrAttr(t_Handle h_FmPort,
-                                 e_FmDmaCacheOption headerCacheAttr)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.dma_header_stash_on =
-            (bool)(headerCacheAttr == e_FM_DMA_STASH);
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigDmaScatterGatherAttr(
-        t_Handle h_FmPort, e_FmDmaCacheOption scatterGatherCacheAttr)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.dma_sg_stash_on =
-            (bool)(scatterGatherCacheAttr == e_FM_DMA_STASH);
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigDmaWriteOptimize(t_Handle h_FmPort, bool optimize)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    if ((p_FmPort->portType == e_FM_PORT_TYPE_TX_10G)
-            || (p_FmPort->portType == e_FM_PORT_TYPE_TX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("Not available for Tx ports"));
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.dma_write_optimize = optimize;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigNoScatherGather(t_Handle h_FmPort, bool noScatherGather)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    UNUSED(noScatherGather);
-    UNUSED(p_FmPort);
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    p_FmPort->p_FmPortDriverParam->noScatherGather = noScatherGather;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigForwardReuseIntContext(t_Handle h_FmPort,
-                                             bool forwardReuse)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_RX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for Rx ports only"));
-
-    p_FmPort->p_FmPortDriverParam->forwardReuseIntContext = forwardReuse;
-
-    return E_OK;
-}
-
 t_Error FM_PORT_ConfigMaxFrameLength(t_Handle h_FmPort, uint16_t length)
 {
     t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
@@ -3186,263 +2837,13 @@ t_Error FM_PORT_ConfigMaxFrameLength(t_Handle h_FmPort, uint16_t length)
     return E_OK;
 }
 
-#ifdef FM_HEAVY_TRAFFIC_HANG_ERRATA_FMAN_A005669
-t_Error FM_PORT_ConfigBCBWorkaround(t_Handle h_FmPort)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    p_FmPort->p_FmPortDriverParam->bcbWorkaround = TRUE;
-
-    return E_OK;
-}
-#endif /* FM_HEAVY_TRAFFIC_HANG_ERRATA_FMAN_A005669 */
-
 /****************************************************/
 /*       Hidden-DEBUG Only API                      */
 /****************************************************/
 
-t_Error FM_PORT_ConfigTxFifoMinFillLevel(t_Handle h_FmPort,
-                                         uint32_t minFillLevel)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_TX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_TX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for Tx ports only"));
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.tx_fifo_min_level = minFillLevel;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigFifoDeqPipelineDepth(t_Handle h_FmPort,
-                                           uint8_t deqPipelineDepth)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    if ((p_FmPort->portType == e_FM_PORT_TYPE_RX_10G)
-            || (p_FmPort->portType == e_FM_PORT_TYPE_RX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("Not available for Rx ports"));
-
-    if (p_FmPort->imEn)
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("Not available for IM ports!"));
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.tx_fifo_deq_pipeline_depth =
-            deqPipelineDepth;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigTxFifoLowComfLevel(t_Handle h_FmPort,
-                                         uint32_t fifoLowComfLevel)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_TX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_TX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for Tx ports only"));
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.tx_fifo_low_comf_level =
-            fifoLowComfLevel;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigRxFifoThreshold(t_Handle h_FmPort, uint32_t fifoThreshold)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_RX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for Rx ports only"));
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.rx_fifo_thr = fifoThreshold;
-
-    return E_OK;
-}
-
-t_Error FM_PORT_ConfigRxFifoPriElevationLevel(t_Handle h_FmPort,
-                                              uint32_t priElevationLevel)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_RX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for Rx ports only"));
-
-    p_FmPort->p_FmPortDriverParam->dfltCfg.rx_pri_elevation = priElevationLevel;
-
-    return E_OK;
-}
 /****************************************************/
 /*       API Run-time Control unit functions        */
 /****************************************************/
-
-t_Error FM_PORT_SetNumOfOpenDmas(t_Handle h_FmPort,
-                                 t_FmPortRsrc *p_NumOfOpenDmas)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    t_Error err;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    if ((!p_NumOfOpenDmas->num) || (p_NumOfOpenDmas->num > MAX_NUM_OF_DMAS))
-        RETURN_ERROR( MAJOR, E_INVALID_VALUE,
-                     ("openDmas-num can't be larger than %d", MAX_NUM_OF_DMAS));
-    if (p_NumOfOpenDmas->extra > MAX_NUM_OF_EXTRA_DMAS)
-        RETURN_ERROR(
-                MAJOR,
-                E_INVALID_VALUE,
-                ("openDmas-extra can't be larger than %d", MAX_NUM_OF_EXTRA_DMAS));
-    err = FmSetNumOfOpenDmas(p_FmPort->h_Fm, p_FmPort->hardwarePortId,
-                             (uint8_t*)&p_NumOfOpenDmas->num,
-                             (uint8_t*)&p_NumOfOpenDmas->extra, FALSE);
-    if (err)
-        RETURN_ERROR(MAJOR, err, NO_MSG);
-
-    memcpy(&p_FmPort->openDmas, p_NumOfOpenDmas, sizeof(t_FmPortRsrc));
-
-    return E_OK;
-}
-
-t_Error FM_PORT_SetNumOfTasks(t_Handle h_FmPort, t_FmPortRsrc *p_NumOfTasks)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    t_Error err;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    /* only driver uses host command port, so ASSERT rather than  RETURN_ERROR */
-    ASSERT_COND(p_FmPort->portType != e_FM_PORT_TYPE_OH_HOST_COMMAND);
-
-    if ((!p_NumOfTasks->num) || (p_NumOfTasks->num > MAX_NUM_OF_TASKS))
-        RETURN_ERROR(
-                MAJOR, E_INVALID_VALUE,
-                ("NumOfTasks-num can't be larger than %d", MAX_NUM_OF_TASKS));
-    if (p_NumOfTasks->extra > MAX_NUM_OF_EXTRA_TASKS)
-        RETURN_ERROR(
-                MAJOR,
-                E_INVALID_VALUE,
-                ("NumOfTasks-extra can't be larger than %d", MAX_NUM_OF_EXTRA_TASKS));
-
-    err = FmSetNumOfTasks(p_FmPort->h_Fm, p_FmPort->hardwarePortId,
-                          (uint8_t*)&p_NumOfTasks->num,
-                          (uint8_t*)&p_NumOfTasks->extra, FALSE);
-    if (err)
-        RETURN_ERROR(MAJOR, err, NO_MSG);
-
-    /* update driver's struct */
-    memcpy(&p_FmPort->tasks, p_NumOfTasks, sizeof(t_FmPortRsrc));
-    return E_OK;
-}
-
-t_Error FM_PORT_SetSizeOfFifo(t_Handle h_FmPort, t_FmPortRsrc *p_SizeOfFifo)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    t_Error err;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    if (!p_SizeOfFifo->num || (p_SizeOfFifo->num > MAX_PORT_FIFO_SIZE))
-        RETURN_ERROR(
-                MAJOR,
-                E_INVALID_VALUE,
-                ("SizeOfFifo-num has to be in the range of 256 - %lu", MAX_PORT_FIFO_SIZE));
-    if (p_SizeOfFifo->num % BMI_FIFO_UNITS)
-        RETURN_ERROR(
-                MAJOR, E_INVALID_VALUE,
-                ("SizeOfFifo-num has to be divisible by %d", BMI_FIFO_UNITS));
-    if ((p_FmPort->portType == e_FM_PORT_TYPE_RX)
-            || (p_FmPort->portType == e_FM_PORT_TYPE_RX_10G))
-    {
-        /* extra FIFO size (allowed only to Rx ports) */
-        if (p_SizeOfFifo->extra % BMI_FIFO_UNITS)
-            RETURN_ERROR(
-                    MAJOR,
-                    E_INVALID_VALUE,
-                    ("SizeOfFifo-extra has to be divisible by %d", BMI_FIFO_UNITS));
-    }
-    else
-        if (p_SizeOfFifo->extra)
-            RETURN_ERROR(MAJOR, E_INVALID_VALUE,
-                         (" No SizeOfFifo-extra for non Rx ports"));
-
-    memcpy(&p_FmPort->fifoBufs, p_SizeOfFifo, sizeof(t_FmPortRsrc));
-
-    /* we do not change user's parameter */
-    err = VerifySizeOfFifo(p_FmPort);
-    if (err)
-        RETURN_ERROR(MAJOR, err, NO_MSG);
-
-    err = FmSetSizeOfFifo(p_FmPort->h_Fm, p_FmPort->hardwarePortId,
-                          &p_SizeOfFifo->num, &p_SizeOfFifo->extra, FALSE);
-    if (err)
-        RETURN_ERROR(MAJOR, err, NO_MSG);
-
-    return E_OK;
-}
-
-uint32_t FM_PORT_GetBufferDataOffset(t_Handle h_FmPort)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_VALUE(p_FmPort, E_INVALID_HANDLE, 0);
-    SANITY_CHECK_RETURN_VALUE(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE,
-                              0);
-
-    return p_FmPort->bufferOffsets.dataOffset;
-}
-
-uint8_t * FM_PORT_GetBufferICInfo(t_Handle h_FmPort, char *p_Data)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_VALUE(p_FmPort, E_INVALID_HANDLE, NULL);
-    SANITY_CHECK_RETURN_VALUE(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE,
-                              NULL);
-
-    if (p_FmPort->bufferOffsets.pcdInfoOffset == ILLEGAL_BASE)
-        return NULL;
-
-    return (uint8_t *)PTR_MOVE(p_Data, p_FmPort->bufferOffsets.pcdInfoOffset);
-}
-
-t_FmPrsResult * FM_PORT_GetBufferPrsResult(t_Handle h_FmPort, char *p_Data)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_VALUE(p_FmPort, E_INVALID_HANDLE, NULL);
-    SANITY_CHECK_RETURN_VALUE(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE,
-                              NULL);
-
-    if (p_FmPort->bufferOffsets.prsResultOffset == ILLEGAL_BASE)
-        return NULL;
-
-    return (t_FmPrsResult *)PTR_MOVE(p_Data, p_FmPort->bufferOffsets.prsResultOffset);
-}
 
 uint64_t * FM_PORT_GetBufferTimeStamp(t_Handle h_FmPort, char *p_Data)
 {
@@ -3456,20 +2857,6 @@ uint64_t * FM_PORT_GetBufferTimeStamp(t_Handle h_FmPort, char *p_Data)
         return NULL;
 
     return (uint64_t *)PTR_MOVE(p_Data, p_FmPort->bufferOffsets.timeStampOffset);
-}
-
-uint8_t * FM_PORT_GetBufferHashResult(t_Handle h_FmPort, char *p_Data)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_VALUE(p_FmPort, E_INVALID_HANDLE, NULL);
-    SANITY_CHECK_RETURN_VALUE(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE,
-                              NULL);
-
-    if (p_FmPort->bufferOffsets.hashResultOffset == ILLEGAL_BASE)
-        return NULL;
-
-    return (uint8_t *)PTR_MOVE(p_Data, p_FmPort->bufferOffsets.hashResultOffset);
 }
 
 t_Error FM_PORT_Disable(t_Handle h_FmPort)
@@ -3500,13 +2887,92 @@ t_Error FM_PORT_Disable(t_Handle h_FmPort)
     return E_OK;
 }
 
+t_Error FM_PORT_GetEnabled(t_Handle h_FmPort, bool *p_Enabled)
+{
+    t_FmPort *p_FmPort = (t_FmPort *)h_FmPort;
+
+    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
+    SANITY_CHECK_RETURN_ERROR(p_Enabled, E_NULL_POINTER);
+    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
+    *p_Enabled = p_FmPort->enabled;
+    return E_OK;
+}
+
+t_Error FM_PORT_GetStopped(t_Handle h_FmPort, bool *p_Stopped)
+{
+    t_FmPort *p_FmPort = (t_FmPort *)h_FmPort;
+
+    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
+    SANITY_CHECK_RETURN_ERROR(p_Stopped, E_NULL_POINTER);
+    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
+    *p_Stopped = !p_FmPort->enabled && fman_port_is_stopped(&p_FmPort->port);
+    return E_OK;
+}
+
+t_Error FM_PORT_IsPcdAttached(t_Handle h_FmPort, bool *p_Attached)
+{
+    t_FmPort *p_FmPort = (t_FmPort *)h_FmPort;
+    volatile uint32_t *p_BmiNia;
+
+    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
+    SANITY_CHECK_RETURN_ERROR(p_Attached, E_NULL_POINTER);
+    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
+    switch (p_FmPort->portType)
+    {
+        case (e_FM_PORT_TYPE_RX_10G):
+        case (e_FM_PORT_TYPE_RX):
+            p_BmiNia = &p_FmPort->port.bmi_regs->rx.fmbm_rfne;
+            break;
+        case (e_FM_PORT_TYPE_OH_OFFLINE_PARSING):
+            p_BmiNia = &p_FmPort->port.bmi_regs->oh.fmbm_ofne;
+            break;
+        default:
+            /* No other port type can be given a PCD (FM_PORT_SetPCD()). */
+            *p_Attached = FALSE;
+            return E_OK;
+    }
+    /* The test AttachPCD() makes of a port in the BMI-to-BMI state. */
+    *p_Attached = (GET_UINT32(*p_BmiNia) & ~BMI_RFNE_FDCS_MASK)
+            != GET_NO_PCD_NIA_BMI_AC_ENQ_FRAME();
+    return E_OK;
+}
+
+t_Error FM_PORT_SetFenced(t_Handle h_FmPort, bool fenced)
+{
+    t_FmPort *p_FmPort = (t_FmPort *)h_FmPort;
+    uint32_t intFlags;
+
+    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
+    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
+    /* Under the lock FM_PORT_Enable() reads the fence and enables under: an
+     * enable either finished before this, and the disable a fencing caller
+     * issues next stops the port again, or it finds the fence. */
+    intFlags = XX_LockIntrSpinlock(p_FmPort->h_Spinlock);
+    p_FmPort->fenced = fenced;
+    XX_UnlockIntrSpinlock(p_FmPort->h_Spinlock, intFlags);
+    return E_OK;
+}
+
 t_Error FM_PORT_Enable(t_Handle h_FmPort)
 {
     t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
+    uint32_t intFlags;
     int err;
 
     SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
     SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
+
+    /* A port whose owner has stopped it to inspect the classifier stays
+     * stopped, whoever asks: a netdev's open, a resume. The fence is read
+     * and the port enabled under one hold of the lock FM_PORT_SetFenced()
+     * takes, so no enable that found the fence open lands after the
+     * owner's stop. */
+    intFlags = XX_LockIntrSpinlock(p_FmPort->h_Spinlock);
+    if (p_FmPort->fenced)
+    {
+        XX_UnlockIntrSpinlock(p_FmPort->h_Spinlock, intFlags);
+        return ERROR_CODE(E_BUSY);
+    }
 
     /* Used by FM_PORT_Free routine as indication
      if to disable port. Thus set it to TRUE prior
@@ -3521,584 +2987,27 @@ t_Error FM_PORT_Enable(t_Handle h_FmPort)
         FmPortImEnable(p_FmPort);
 
     err = fman_port_enable(&p_FmPort->port);
+    XX_UnlockIntrSpinlock(p_FmPort->h_Spinlock, intFlags);
     if (err != 0)
         RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("fman_port_enable"));
 
     return E_OK;
 }
 
-t_Error FM_PORT_SetRateLimit(t_Handle h_FmPort, t_FmPortRateLimit *p_RateLimit)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    uint8_t factor, countUnitBit;
-    uint16_t baseGran;
-    struct fman_port_rate_limiter params;
-    int err;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    switch (p_FmPort->portType)
-    {
-        case (e_FM_PORT_TYPE_TX_10G):
-        case (e_FM_PORT_TYPE_TX):
-            baseGran = BMI_RATE_LIMIT_GRAN_TX;
-            break;
-        case (e_FM_PORT_TYPE_OH_OFFLINE_PARSING):
-            baseGran = BMI_RATE_LIMIT_GRAN_OP;
-            break;
-        default:
-            RETURN_ERROR( MAJOR, E_INVALID_OPERATION,
-                         ("available for Tx and Offline parsing ports only"));
-    }
-
-    countUnitBit = (uint8_t)FmGetTimeStampScale(p_FmPort->h_Fm); /* TimeStamp per nano seconds units */
-    /* normally, we use 1 usec as the reference count */
-    factor = 1;
-    /* if ratelimit is too small for a 1usec factor, multiply the factor */
-    while (p_RateLimit->rateLimit < baseGran / factor)
-    {
-        if (countUnitBit == 31)
-            RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("Rate limit is too small"));
-
-        countUnitBit++;
-        factor <<= 1;
-    }
-    /* if ratelimit is too large for a 1usec factor, it is also larger than max rate*/
-    if (p_RateLimit->rateLimit
-            > ((uint32_t)baseGran * (1 << 10) * (uint32_t)factor))
-        RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("Rate limit is too large"));
-
-    if (!p_RateLimit->maxBurstSize
-            || (p_RateLimit->maxBurstSize > BMI_RATE_LIMIT_MAX_BURST_SIZE))
-        RETURN_ERROR(
-                MAJOR,
-                E_INVALID_VALUE,
-                ("maxBurstSize must be between 1K and %dk", BMI_RATE_LIMIT_MAX_BURST_SIZE));
-
-    params.count_1micro_bit = (uint8_t)FmGetTimeStampScale(p_FmPort->h_Fm);
-    params.high_burst_size_gran = FALSE;
-    params.burst_size = p_RateLimit->maxBurstSize;
-    params.rate = p_RateLimit->rateLimit;
-    params.rate_factor = E_FMAN_PORT_RATE_DOWN_NONE;
-
-    if (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
-    {
-#ifndef FM_NO_ADVANCED_RATE_LIMITER
-
-        if ((p_FmPort->fmRevInfo.majorRev == 4)
-                || (p_FmPort->fmRevInfo.majorRev >= 6))
-        {
-            params.high_burst_size_gran = TRUE;
-        }
-        else
-#endif /* ! FM_NO_ADVANCED_RATE_LIMITER */
-        {
-            if (p_RateLimit->rateLimitDivider
-                    != e_FM_PORT_DUAL_RATE_LIMITER_NONE)
-                RETURN_ERROR(MAJOR, E_NOT_SUPPORTED,
-                             ("FM_PORT_ConfigDualRateLimitScaleDown"));
-
-            if (p_RateLimit->maxBurstSize % 1000)
-            {
-                p_RateLimit->maxBurstSize =
-                        (uint16_t)((p_RateLimit->maxBurstSize / 1000) + 1);
-                DBG(WARNING, ("rateLimit.maxBurstSize rounded up to %d", (p_RateLimit->maxBurstSize/1000+1)*1000));
-            }
-            else
-                p_RateLimit->maxBurstSize = (uint16_t)(p_RateLimit->maxBurstSize
-                        / 1000);
-        }
-        params.rate_factor =
-                (enum fman_port_rate_limiter_scale_down)p_RateLimit->rateLimitDivider;
-        params.burst_size = p_RateLimit->maxBurstSize;
-    }
-
-    err = fman_port_set_rate_limiter(&p_FmPort->port, &params);
-    if (err != 0)
-        RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("fman_port_set_rate_limiter"));
-
-    return E_OK;
-}
-
-t_Error FM_PORT_DeleteRateLimit(t_Handle h_FmPort)
+#if defined(CONFIG_INET_IPSEC_OFFLOAD) || defined(CONFIG_INET6_IPSEC_OFFLOAD)
+t_Error FM_PORT_SetDiscardMask(t_Handle h_FmPort, fmPortFrameErrSelect_t errs)
 {
     t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
     int err;
 
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_HANDLE);
-
-    if ((p_FmPort->portType == e_FM_PORT_TYPE_RX_10G)
-            || (p_FmPort->portType == e_FM_PORT_TYPE_RX)
-            || (p_FmPort->portType == e_FM_PORT_TYPE_OH_HOST_COMMAND))
-        RETURN_ERROR( MAJOR, E_INVALID_OPERATION,
-                     ("available for Tx and Offline parsing ports only"));
-
-    err = fman_port_delete_rate_limiter(&p_FmPort->port);
+    err = fman_port_set_discard_mask(&p_FmPort->port, (uint32_t)errs);
     if (err != 0)
-        RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("fman_port_set_rate_limiter"));
-    return E_OK;
-}
-
-t_Error FM_PORT_SetPfcPrioritiesMappingToQmanWQ(t_Handle h_FmPort, uint8_t prio,
-                                                uint8_t wq)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    uint32_t tmpReg;
-    uint32_t wqTmpReg;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_TX)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_TX_10G))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("PFC mapping is available for Tx ports only"));
-
-    if (prio > 7)
-        RETURN_ERROR(MAJOR, E_NOT_IN_RANGE,
-                     ("PFC priority (%d) is out of range (0-7)", prio));
-    if (wq > 7)
-        RETURN_ERROR(MAJOR, E_NOT_IN_RANGE,
-                     ("WQ (%d) is out of range (0-7)", wq));
-
-    tmpReg = GET_UINT32(p_FmPort->p_FmPortBmiRegs->txPortBmiRegs.fmbm_tpfcm[0]);
-    tmpReg &= ~(0xf << ((7 - prio) * 4));
-    wqTmpReg = ((uint32_t)wq << ((7 - prio) * 4));
-    tmpReg |= wqTmpReg;
-
-    WRITE_UINT32(p_FmPort->p_FmPortBmiRegs->txPortBmiRegs.fmbm_tpfcm[0],
-                 tmpReg);
+        RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("fman_port_set_discard_mask"));
 
     return E_OK;
 }
-
-t_Error FM_PORT_SetFrameQueueCounters(t_Handle h_FmPort, bool enable)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-
-    fman_port_set_queue_cnt_mode(&p_FmPort->port, enable);
-
-    return E_OK;
-}
-
-t_Error FM_PORT_SetPerformanceCounters(t_Handle h_FmPort, bool enable)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    int err;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-
-    err = fman_port_set_perf_cnt_mode(&p_FmPort->port, enable);
-    if (err != 0)
-        RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("fman_port_set_perf_cnt_mode"));
-    return E_OK;
-}
-
-t_Error FM_PORT_SetPerformanceCountersParams(
-        t_Handle h_FmPort, t_FmPortPerformanceCnt *p_FmPortPerformanceCnt)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    struct fman_port_perf_cnt_params params;
-    int err;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-
-    /* check parameters */
-    if (!p_FmPortPerformanceCnt->taskCompVal
-            || (p_FmPortPerformanceCnt->taskCompVal > p_FmPort->tasks.num))
-        RETURN_ERROR(
-                MAJOR,
-                E_INVALID_VALUE,
-                ("taskCompVal (%d) has to be in the range of 1 - %d (current value)!", p_FmPortPerformanceCnt->taskCompVal, p_FmPort->tasks.num));
-    if (!p_FmPortPerformanceCnt->dmaCompVal
-            || (p_FmPortPerformanceCnt->dmaCompVal > p_FmPort->openDmas.num))
-        RETURN_ERROR(
-                MAJOR,
-                E_INVALID_VALUE,
-                ("dmaCompVal (%d) has to be in the range of 1 - %d (current value)!", p_FmPortPerformanceCnt->dmaCompVal, p_FmPort->openDmas.num));
-    if (!p_FmPortPerformanceCnt->fifoCompVal
-            || (p_FmPortPerformanceCnt->fifoCompVal > p_FmPort->fifoBufs.num))
-        RETURN_ERROR(
-                MAJOR,
-                E_INVALID_VALUE,
-                ("fifoCompVal (%d) has to be in the range of 256 - %d (current value)!", p_FmPortPerformanceCnt->fifoCompVal, p_FmPort->fifoBufs.num));
-    if (p_FmPortPerformanceCnt->fifoCompVal % BMI_FIFO_UNITS)
-        RETURN_ERROR(
-                MAJOR,
-                E_INVALID_VALUE,
-                ("fifoCompVal (%d) has to be divisible by %d", p_FmPortPerformanceCnt->fifoCompVal, BMI_FIFO_UNITS));
-
-    switch (p_FmPort->portType)
-    {
-        case (e_FM_PORT_TYPE_RX_10G):
-        case (e_FM_PORT_TYPE_RX):
-            if (!p_FmPortPerformanceCnt->queueCompVal
-                    || (p_FmPortPerformanceCnt->queueCompVal
-                            > MAX_PERFORMANCE_RX_QUEUE_COMP))
-                RETURN_ERROR(
-                        MAJOR,
-                        E_INVALID_VALUE,
-                        ("performanceCnt.queueCompVal for Rx has to be in the range of 1 - %d", MAX_PERFORMANCE_RX_QUEUE_COMP));
-            break;
-        case (e_FM_PORT_TYPE_TX_10G):
-        case (e_FM_PORT_TYPE_TX):
-            if (!p_FmPortPerformanceCnt->queueCompVal
-                    || (p_FmPortPerformanceCnt->queueCompVal
-                            > MAX_PERFORMANCE_TX_QUEUE_COMP))
-                RETURN_ERROR(
-                        MAJOR,
-                        E_INVALID_VALUE,
-                        ("performanceCnt.queueCompVal for Tx has to be in the range of 1 - %d", MAX_PERFORMANCE_TX_QUEUE_COMP));
-            break;
-        case (e_FM_PORT_TYPE_OH_OFFLINE_PARSING):
-        case (e_FM_PORT_TYPE_OH_HOST_COMMAND):
-            if (p_FmPortPerformanceCnt->queueCompVal)
-                RETURN_ERROR(
-                        MAJOR,
-                        E_INVALID_VALUE,
-                        ("performanceCnt.queueCompVal is not relevant for H/O ports."));
-            break;
-        default:
-            RETURN_ERROR(MAJOR, E_INVALID_STATE, ("Invalid port type"));
-    }
-
-    params.task_val = p_FmPortPerformanceCnt->taskCompVal;
-    params.queue_val = p_FmPortPerformanceCnt->queueCompVal;
-    params.dma_val = p_FmPortPerformanceCnt->dmaCompVal;
-    params.fifo_val = p_FmPortPerformanceCnt->fifoCompVal;
-
-    err = fman_port_set_perf_cnt_params(&p_FmPort->port, &params);
-    if (err != 0)
-        RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("fman_port_set_perf_cnt_params"));
-
-    return E_OK;
-}
-
-t_Error FM_PORT_AnalyzePerformanceParams(t_Handle h_FmPort)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    t_FmPortPerformanceCnt currParams, savedParams;
-    t_Error err;
-    bool underTest, failed = FALSE;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-
-    XX_Print("Analyzing Performance parameters for port (type %d, id%d)\n",
-             p_FmPort->portType, p_FmPort->portId);
-
-    currParams.taskCompVal = (uint8_t)p_FmPort->tasks.num;
-    if ((p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
-            || (p_FmPort->portType == e_FM_PORT_TYPE_OH_HOST_COMMAND))
-        currParams.queueCompVal = 0;
-    else
-        currParams.queueCompVal = 1;
-    currParams.dmaCompVal = (uint8_t)p_FmPort->openDmas.num;
-    currParams.fifoCompVal = p_FmPort->fifoBufs.num;
-
-    FM_PORT_SetPerformanceCounters(p_FmPort, FALSE);
-    ClearPerfCnts(p_FmPort);
-    if ((err = FM_PORT_SetPerformanceCountersParams(p_FmPort, &currParams))
-            != E_OK)
-        RETURN_ERROR(MAJOR, err, NO_MSG);
-    FM_PORT_SetPerformanceCounters(p_FmPort, TRUE);
-    XX_UDelay(1000000);
-    FM_PORT_SetPerformanceCounters(p_FmPort, FALSE);
-    if (FM_PORT_GetCounter(p_FmPort, e_FM_PORT_COUNTERS_TASK_UTIL))
-    {
-        XX_Print(
-                "Max num of defined port tasks (%d) utilized - Please enlarge\n",
-                p_FmPort->tasks.num);
-        failed = TRUE;
-    }
-    if (FM_PORT_GetCounter(p_FmPort, e_FM_PORT_COUNTERS_DMA_UTIL))
-    {
-        XX_Print(
-                "Max num of defined port openDmas (%d) utilized - Please enlarge\n",
-                p_FmPort->openDmas.num);
-        failed = TRUE;
-    }
-    if (FM_PORT_GetCounter(p_FmPort, e_FM_PORT_COUNTERS_FIFO_UTIL))
-    {
-        XX_Print(
-                "Max size of defined port fifo (%d) utilized - Please enlarge\n",
-                p_FmPort->fifoBufs.num);
-        failed = TRUE;
-    }
-    if (failed)
-        RETURN_ERROR(MAJOR, E_INVALID_STATE, NO_MSG);
-
-    memset(&savedParams, 0, sizeof(savedParams));
-    while (TRUE)
-    {
-        underTest = FALSE;
-        if ((currParams.taskCompVal != 1) && !savedParams.taskCompVal)
-        {
-            currParams.taskCompVal--;
-            underTest = TRUE;
-        }
-        if ((currParams.dmaCompVal != 1) && !savedParams.dmaCompVal)
-        {
-            currParams.dmaCompVal--;
-            underTest = TRUE;
-        }
-        if ((currParams.fifoCompVal != BMI_FIFO_UNITS)
-                && !savedParams.fifoCompVal)
-        {
-            currParams.fifoCompVal -= BMI_FIFO_UNITS;
-            underTest = TRUE;
-        }
-        if (!underTest)
-            break;
-
-        ClearPerfCnts(p_FmPort);
-        if ((err = FM_PORT_SetPerformanceCountersParams(p_FmPort, &currParams))
-                != E_OK)
-            RETURN_ERROR(MAJOR, err, NO_MSG);
-        FM_PORT_SetPerformanceCounters(p_FmPort, TRUE);
-        XX_UDelay(1000000);
-        FM_PORT_SetPerformanceCounters(p_FmPort, FALSE);
-
-        if (!savedParams.taskCompVal
-                && FM_PORT_GetCounter(p_FmPort, e_FM_PORT_COUNTERS_TASK_UTIL))
-            savedParams.taskCompVal = (uint8_t)(currParams.taskCompVal + 2);
-        if (!savedParams.dmaCompVal
-                && FM_PORT_GetCounter(p_FmPort, e_FM_PORT_COUNTERS_DMA_UTIL))
-            savedParams.dmaCompVal = (uint8_t)(currParams.dmaCompVal + 2);
-        if (!savedParams.fifoCompVal
-                && FM_PORT_GetCounter(p_FmPort, e_FM_PORT_COUNTERS_FIFO_UTIL))
-            savedParams.fifoCompVal = currParams.fifoCompVal
-                    + (2 * BMI_FIFO_UNITS);
-    }
-
-    XX_Print("best vals: tasks %d, dmas %d, fifos %d\n",
-             savedParams.taskCompVal, savedParams.dmaCompVal,
-             savedParams.fifoCompVal);
-    return E_OK;
-}
-
-t_Error FM_PORT_SetStatisticsCounters(t_Handle h_FmPort, bool enable)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    int err;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-
-    err = fman_port_set_stats_cnt_mode(&p_FmPort->port, enable);
-    if (err != 0)
-        RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("fman_port_set_stats_cnt_mode"));
-    return E_OK;
-}
-
-t_Error FM_PORT_SetErrorsRoute(t_Handle h_FmPort, fmPortFrameErrSelect_t errs)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    volatile uint32_t *p_ErrDiscard = NULL;
-    int err;
-
-    UNUSED(p_ErrDiscard);
-    err = fman_port_set_err_mask(&p_FmPort->port, (uint32_t)errs);
-    if (err != 0)
-        RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("fman_port_set_err_mask"));
-
-#ifdef FM_ERROR_VSP_NO_MATCH_SW006
-    if (p_FmPort->fmRevInfo.majorRev >= 6)
-    {
-        t_FmPcdCtrlParamsPage *p_ParamsPage;
-
-        FmPortSetGprFunc(p_FmPort, e_FM_PORT_GPR_MURAM_PAGE,
-                         (void**)&p_ParamsPage);
-        ASSERT_COND(p_ParamsPage);
-        switch (p_FmPort->portType)
-        {
-            case (e_FM_PORT_TYPE_RX_10G):
-            case (e_FM_PORT_TYPE_RX):
-                p_ErrDiscard =
-                        &p_FmPort->p_FmPortBmiRegs->rxPortBmiRegs.fmbm_rfsdm;
-                break;
-            case (e_FM_PORT_TYPE_OH_OFFLINE_PARSING):
-                p_ErrDiscard =
-                        &p_FmPort->p_FmPortBmiRegs->ohPortBmiRegs.fmbm_ofsdm;
-                break;
-            default:
-                RETURN_ERROR(
-                        MAJOR, E_INVALID_OPERATION,
-                        ("available for Rx and offline parsing ports only"));
-        }
-        WRITE_UINT32(p_ParamsPage->errorsDiscardMask,
-                     GET_UINT32(*p_ErrDiscard) | errs);
-    }
-#endif /* FM_ERROR_VSP_NO_MATCH_SW006 */
-
-    return E_OK;
-}
-
-t_Error FM_PORT_SetAllocBufCounter(t_Handle h_FmPort, uint8_t poolId,
-                                   bool enable)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    int err;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(poolId<BM_MAX_NUM_OF_POOLS, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_RX))
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for Rx ports only"));
-
-    err = fman_port_set_bpool_cnt_mode(&p_FmPort->port, poolId, enable);
-    if (err != 0)
-        RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("fman_port_set_bpool_cnt_mode"));
-    return E_OK;
-}
-
-t_Error FM_PORT_GetBmiCounters(t_Handle h_FmPort, t_FmPortBmiStats *p_BmiStats)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    if ((p_FmPort->portType == e_FM_PORT_TYPE_RX)
-            || (p_FmPort->portType == e_FM_PORT_TYPE_RX_10G)){
-        p_BmiStats->cntCycle =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_CYCLE);
-            /* fmbm_rccn */
-        p_BmiStats->cntTaskUtil =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_TASK_UTIL);
-            /* fmbm_rtuc */
-        p_BmiStats->cntQueueUtil =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_QUEUE_UTIL);
-            /* fmbm_rrquc */
-        p_BmiStats->cntDmaUtil =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_DMA_UTIL);
-            /* fmbm_rduc */
-        p_BmiStats->cntFifoUtil =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_FIFO_UTIL);
-            /* fmbm_rfuc */
-        p_BmiStats->cntRxPauseActivation =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_RX_PAUSE_ACTIVATION);
-            /* fmbm_rpac */
-        p_BmiStats->cntFrame =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_FRAME);
-            /* fmbm_rfrc */
-        p_BmiStats->cntDiscardFrame =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_DISCARD_FRAME);
-            /* fmbm_rfdc */
-        p_BmiStats->cntDeallocBuf =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_DEALLOC_BUF);
-            /* fmbm_rbdc */
-        p_BmiStats->cntRxBadFrame =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_RX_BAD_FRAME);
-            /* fmbm_rfbc */
-        p_BmiStats->cntRxLargeFrame =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_RX_LARGE_FRAME);
-            /* fmbm_rlfc */
-        p_BmiStats->cntRxFilterFrame =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_RX_FILTER_FRAME);
-            /* fmbm_rffc */
-        p_BmiStats->cntRxListDmaErr =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_RX_LIST_DMA_ERR);
-            /* fmbm_rfldec */
-        p_BmiStats->cntRxOutOfBuffersDiscard =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_RX_OUT_OF_BUFFERS_DISCARD);
-            /* fmbm_rodc */
-        p_BmiStats->cntWredDiscard = 0;
-        p_BmiStats->cntLengthErr = 0;
-        p_BmiStats->cntUnsupportedFormat = 0;
-    }
-    else if ((p_FmPort->portType == e_FM_PORT_TYPE_TX)
-                || (p_FmPort->portType == e_FM_PORT_TYPE_TX_10G)){
-        p_BmiStats->cntCycle =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_CYCLE);
-            /* fmbm_tccn */
-        p_BmiStats->cntTaskUtil =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_TASK_UTIL);
-            /* fmbm_ttuc */
-        p_BmiStats->cntQueueUtil =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_QUEUE_UTIL);
-            /* fmbm_ttcquc */
-        p_BmiStats->cntDmaUtil =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_DMA_UTIL);
-            /* fmbm_tduc */
-        p_BmiStats->cntFifoUtil =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_FIFO_UTIL);
-            /* fmbm_tfuc */
-        p_BmiStats->cntRxPauseActivation = 0;
-        p_BmiStats->cntFrame =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_FRAME);
-            /* fmbm_tfrc */
-        p_BmiStats->cntDiscardFrame =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_DISCARD_FRAME);
-            /* fmbm_tfdc */
-        p_BmiStats->cntDeallocBuf =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_DEALLOC_BUF);
-            /* fmbm_tbdc */
-        p_BmiStats->cntRxBadFrame = 0;
-        p_BmiStats->cntRxLargeFrame = 0;
-        p_BmiStats->cntRxFilterFrame = 0;
-        p_BmiStats->cntRxListDmaErr = 0;
-        p_BmiStats->cntRxOutOfBuffersDiscard = 0;
-        p_BmiStats->cntWredDiscard = 0;
-        p_BmiStats->cntLengthErr =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_LENGTH_ERR);
-            /* fmbm_tfledc */
-        p_BmiStats->cntUnsupportedFormat =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_UNSUPPRTED_FORMAT);
-            /* fmbm_tfufdc */
-    }
-    else if (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING) {
-        p_BmiStats->cntCycle =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_CYCLE);
-            /* fmbm_occn */
-        p_BmiStats->cntTaskUtil =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_TASK_UTIL);
-            /* fmbm_otuc */
-        p_BmiStats->cntQueueUtil = 0;
-        p_BmiStats->cntDmaUtil =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_DMA_UTIL);
-            /* fmbm_oduc */
-        p_BmiStats->cntFifoUtil =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_FIFO_UTIL);
-            /* fmbm_ofuc*/
-        p_BmiStats->cntRxPauseActivation = 0;
-        p_BmiStats->cntFrame =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_FRAME);
-            /* fmbm_ofrc */
-        p_BmiStats->cntDiscardFrame =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_DISCARD_FRAME);
-            /* fmbm_ofdc */
-        p_BmiStats->cntDeallocBuf =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_DEALLOC_BUF);
-            /* fmbm_obdc*/
-        p_BmiStats->cntRxBadFrame = 0;
-        p_BmiStats->cntRxLargeFrame = 0;
-        p_BmiStats->cntRxFilterFrame =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_RX_FILTER_FRAME);
-            /* fmbm_offc */
-        p_BmiStats->cntRxListDmaErr =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_RX_LIST_DMA_ERR);
-            /* fmbm_ofldec */
-        p_BmiStats->cntRxOutOfBuffersDiscard =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_RX_OUT_OF_BUFFERS_DISCARD);
-            /* fmbm_rodc */
-        p_BmiStats->cntWredDiscard =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_WRED_DISCARD);
-            /* fmbm_ofwdc */
-        p_BmiStats->cntLengthErr =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_LENGTH_ERR);
-            /* fmbm_ofledc */
-        p_BmiStats->cntUnsupportedFormat =
-            FM_PORT_GetCounter(h_FmPort, e_FM_PORT_COUNTERS_UNSUPPRTED_FORMAT);
-            /* fmbm_ofufdc */
-    }
-    return E_OK;
-}
+EXPORT_SYMBOL(FM_PORT_SetDiscardMask);
+#endif
 
 uint32_t FM_PORT_GetCounter(t_Handle h_FmPort, e_FmPortCounters counter)
 {
@@ -4185,150 +3094,6 @@ uint32_t FM_PORT_GetCounter(t_Handle h_FmPort, e_FmPortCounters counter)
     }
 
     return 0;
-}
-
-t_Error FM_PORT_ModifyCounter(t_Handle h_FmPort, e_FmPortCounters counter,
-                              uint32_t value)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    bool bmiCounter = FALSE;
-    enum fman_port_stats_counters statsType;
-    enum fman_port_perf_counters perfType;
-    enum fman_port_qmi_counters queueType;
-    bool isStats;
-    t_Error errCode;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-
-    switch (counter)
-    {
-        case (e_FM_PORT_COUNTERS_DEQ_TOTAL):
-        case (e_FM_PORT_COUNTERS_DEQ_FROM_DEFAULT):
-        case (e_FM_PORT_COUNTERS_DEQ_CONFIRM):
-            /* check that counter is available for the port type */
-            if ((p_FmPort->portType == e_FM_PORT_TYPE_RX)
-                    || (p_FmPort->portType == e_FM_PORT_TYPE_RX_10G))
-                RETURN_ERROR(
-                        MINOR, E_INVALID_STATE,
-                        ("Requested counter is not available for Rx ports"));
-            fallthrough;
-        case (e_FM_PORT_COUNTERS_ENQ_TOTAL):
-            bmiCounter = FALSE;
-            break;
-        default: /* BMI counters (or error - will be checked in BMI routine )*/
-            bmiCounter = TRUE;
-            break;
-    }
-
-    if (bmiCounter)
-    {
-        errCode = BmiPortCheckAndGetCounterType(p_FmPort, counter, &statsType,
-                                                &perfType, &isStats);
-        if (errCode != E_OK)
-        {
-            RETURN_ERROR(MINOR, errCode, NO_MSG);
-        }
-        if (isStats)
-            fman_port_set_stats_counter(&p_FmPort->port, statsType, value);
-        else
-            fman_port_set_perf_counter(&p_FmPort->port, perfType, value);
-    }
-    else /* QMI counter */
-    {
-        /* check that counters are enabled */
-        if (!(GET_UINT32(p_FmPort->port.qmi_regs->fmqm_pnc)
-                & QMI_PORT_CFG_EN_COUNTERS))
-        {
-            RETURN_ERROR(MINOR, E_INVALID_STATE,
-                         ("Requested counter was not enabled"));
-        }
-
-        /* Set counter */
-        switch (counter)
-        {
-            case (e_FM_PORT_COUNTERS_ENQ_TOTAL):
-                queueType = E_FMAN_PORT_ENQ_TOTAL;
-                break;
-            case (e_FM_PORT_COUNTERS_DEQ_TOTAL):
-                queueType = E_FMAN_PORT_DEQ_TOTAL;
-                break;
-            case (e_FM_PORT_COUNTERS_DEQ_FROM_DEFAULT):
-                queueType = E_FMAN_PORT_DEQ_FROM_DFLT;
-                break;
-            case (e_FM_PORT_COUNTERS_DEQ_CONFIRM):
-                queueType = E_FMAN_PORT_DEQ_CONFIRM;
-                break;
-            default:
-                RETURN_ERROR(MAJOR, E_INVALID_STATE,
-                             ("Requested counter is not available"));
-        }
-
-        fman_port_set_qmi_counter(&p_FmPort->port, queueType, value);
-    }
-
-    return E_OK;
-}
-
-uint32_t FM_PORT_GetAllocBufCounter(t_Handle h_FmPort, uint8_t poolId)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_VALUE(p_FmPort, E_INVALID_HANDLE, 0);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX)
-            && (p_FmPort->portType == e_FM_PORT_TYPE_RX_10G))
-    {
-        REPORT_ERROR(MINOR, E_INVALID_STATE, ("Requested counter is not available for non-Rx ports"));
-        return 0;
-    }
-    return fman_port_get_bpool_counter(&p_FmPort->port, poolId);
-}
-
-t_Error FM_PORT_ModifyAllocBufCounter(t_Handle h_FmPort, uint8_t poolId,
-                                      uint32_t value)
-{
-    t_FmPort *p_FmPort = (t_FmPort *)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX)
-            && (p_FmPort->portType == e_FM_PORT_TYPE_RX_10G))
-        RETURN_ERROR( MINOR, E_INVALID_STATE,
-                     ("Requested counter is not available for non-Rx ports"));
-
-    fman_port_set_bpool_counter(&p_FmPort->port, poolId, value);
-    return E_OK;
-}
-bool FM_PORT_IsStalled(t_Handle h_FmPort)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    t_Error err;
-    bool isStalled;
-
-    SANITY_CHECK_RETURN_VALUE(p_FmPort, E_INVALID_HANDLE, FALSE);
-    SANITY_CHECK_RETURN_VALUE(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE,
-                              FALSE);
-
-    err = FmIsPortStalled(p_FmPort->h_Fm, p_FmPort->hardwarePortId, &isStalled);
-    if (err != E_OK)
-    {
-        REPORT_ERROR(MAJOR, err, NO_MSG);
-        return TRUE;
-    }
-    return isStalled;
-}
-
-t_Error FM_PORT_ReleaseStalled(t_Handle h_FmPort)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-
-    return FmResumeStalledPort(p_FmPort->h_Fm, p_FmPort->hardwarePortId);
 }
 
 t_Error FM_PORT_SetRxL4ChecksumVerify(t_Handle h_FmPort, bool enable)
@@ -4490,6 +3255,8 @@ t_Error FM_PORT_PcdPlcrAllocProfiles(t_Handle h_FmPort, uint16_t numOfProfiles)
 
     return E_OK;
 }
+EXPORT_SYMBOL(FM_PORT_PcdPlcrAllocProfiles);
+
 
 t_Error FM_PORT_PcdPlcrFreeProfiles(t_Handle h_FmPort)
 {
@@ -4510,281 +3277,6 @@ t_Error FM_PORT_PcdPlcrFreeProfiles(t_Handle h_FmPort)
         RETURN_ERROR(MAJOR, err, NO_MSG);
 
     return E_OK;
-}
-
-t_Error FM_PORT_PcdKgModifyInitialScheme(t_Handle h_FmPort,
-                                         t_FmPcdKgSchemeSelect *p_FmPcdKgScheme)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    volatile uint32_t *p_BmiHpnia = NULL;
-    uint32_t tmpReg;
-    uint8_t relativeSchemeId;
-    uint8_t physicalSchemeId;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->pcdEngines & FM_PCD_KG,
-                              E_INVALID_STATE);
-
-    tmpReg = (uint32_t)((p_FmPort->pcdEngines & FM_PCD_CC) ? NIA_KG_CC_EN : 0);
-    switch (p_FmPort->portType)
-    {
-        case (e_FM_PORT_TYPE_RX_10G):
-        case (e_FM_PORT_TYPE_RX):
-            p_BmiHpnia = &p_FmPort->port.bmi_regs->rx.fmbm_rfpne;
-            break;
-        case (e_FM_PORT_TYPE_OH_OFFLINE_PARSING):
-            p_BmiHpnia = &p_FmPort->port.bmi_regs->oh.fmbm_ofpne;
-            break;
-        default:
-            RETURN_ERROR( MAJOR, E_INVALID_OPERATION,
-                         ("available for Rx and offline parsing ports only"));
-    }
-
-    if (!TRY_LOCK(p_FmPort->h_Spinlock, &p_FmPort->lock))
-    {
-        DBG(TRACE, ("FM Port Try Lock - BUSY"));
-        return ERROR_CODE(E_BUSY);
-    }
-
-    /* if we want to change to direct scheme, we need to check that this scheme is valid */
-    if (p_FmPcdKgScheme->direct)
-    {
-        physicalSchemeId = FmPcdKgGetSchemeId(p_FmPcdKgScheme->h_DirectScheme);
-        /* check that this scheme is bound to this port */
-        if (!(p_FmPort->schemesPerPortVector
-                & (uint32_t)(1 << (31 - (uint32_t)physicalSchemeId))))
-        {
-            RELEASE_LOCK(p_FmPort->lock);
-            RETURN_ERROR(
-                    MAJOR, E_INVALID_STATE,
-                    ("called with a scheme that is not bound to this port"));
-        }
-
-        relativeSchemeId = FmPcdKgGetRelativeSchemeId(p_FmPort->h_FmPcd,
-                                                      physicalSchemeId);
-        if (relativeSchemeId >= FM_PCD_KG_NUM_OF_SCHEMES)
-        {
-            RELEASE_LOCK(p_FmPort->lock);
-            RETURN_ERROR(MAJOR, E_NOT_IN_RANGE,
-                         ("called with invalid Scheme "));
-        }
-
-        if (!FmPcdKgIsSchemeValidSw(p_FmPcdKgScheme->h_DirectScheme))
-        {
-            RELEASE_LOCK(p_FmPort->lock);
-            RETURN_ERROR(MAJOR, E_INVALID_STATE,
-                         ("called with uninitialized Scheme "));
-        }
-
-        WRITE_UINT32(
-                *p_BmiHpnia,
-                NIA_ENG_KG | tmpReg | NIA_KG_DIRECT | (uint32_t)physicalSchemeId);
-    }
-    else
-        /* change to indirect scheme */
-        WRITE_UINT32(*p_BmiHpnia, NIA_ENG_KG | tmpReg);
-    RELEASE_LOCK(p_FmPort->lock);
-
-    return E_OK;
-}
-
-t_Error FM_PORT_PcdPlcrModifyInitialProfile(t_Handle h_FmPort,
-                                            t_Handle h_Profile)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    volatile uint32_t *p_BmiNia;
-    volatile uint32_t *p_BmiHpnia;
-    uint32_t tmpReg;
-    uint16_t absoluteProfileId = FmPcdPlcrProfileGetAbsoluteId(h_Profile);
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->pcdEngines & FM_PCD_PLCR,
-                              E_INVALID_STATE);
-
-    /* check relevance of this routine  - only when policer is used
-     directly after BMI or Parser */
-    if ((p_FmPort->pcdEngines & FM_PCD_KG)
-            || (p_FmPort->pcdEngines & FM_PCD_CC))
-        RETURN_ERROR(
-                MAJOR,
-                E_INVALID_STATE,
-                ("relevant only when PCD support mode is e_FM_PCD_SUPPORT_PLCR_ONLY or e_FM_PCD_SUPPORT_PRS_AND_PLCR"));
-
-    switch (p_FmPort->portType)
-    {
-        case (e_FM_PORT_TYPE_RX_10G):
-        case (e_FM_PORT_TYPE_RX):
-            p_BmiNia = &p_FmPort->port.bmi_regs->rx.fmbm_rfne;
-            p_BmiHpnia = &p_FmPort->port.bmi_regs->rx.fmbm_rfpne;
-            tmpReg = GET_UINT32(*p_BmiNia) & BMI_RFNE_FDCS_MASK;
-            break;
-        case (e_FM_PORT_TYPE_OH_OFFLINE_PARSING):
-            p_BmiNia = &p_FmPort->port.bmi_regs->oh.fmbm_ofne;
-            p_BmiHpnia = &p_FmPort->port.bmi_regs->oh.fmbm_ofpne;
-            tmpReg = 0;
-            break;
-        default:
-            RETURN_ERROR( MAJOR, E_INVALID_OPERATION,
-                         ("available for Rx and offline parsing ports only"));
-    }
-
-    if (!TRY_LOCK(p_FmPort->h_Spinlock, &p_FmPort->lock))
-    {
-        DBG(TRACE, ("FM Port Try Lock - BUSY"));
-        return ERROR_CODE(E_BUSY);
-    }
-
-    if (!FmPcdPlcrIsProfileValid(p_FmPort->h_FmPcd, absoluteProfileId))
-    {
-        RELEASE_LOCK(p_FmPort->lock);
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION, ("Invalid profile"));
-    }
-
-    tmpReg |= (uint32_t)(NIA_ENG_PLCR | NIA_PLCR_ABSOLUTE | absoluteProfileId);
-
-    if (p_FmPort->pcdEngines & FM_PCD_PRS) /* e_FM_PCD_SUPPORT_PRS_AND_PLCR */
-    {
-        /* update BMI HPNIA */
-        WRITE_UINT32(*p_BmiHpnia, tmpReg);
-    }
-    else /* e_FM_PCD_SUPPORT_PLCR_ONLY */
-    {
-        /* rfne may contain FDCS bits, so first we read them. */
-        tmpReg |= (GET_UINT32(*p_BmiNia) & BMI_RFNE_FDCS_MASK);
-        /* update BMI NIA */
-        WRITE_UINT32(*p_BmiNia, tmpReg);
-    }RELEASE_LOCK(p_FmPort->lock);
-
-    return E_OK;
-}
-
-t_Error FM_PORT_PcdCcModifyTree(t_Handle h_FmPort, t_Handle h_CcTree)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    t_Error err = E_OK;
-    volatile uint32_t *p_BmiCcBase = NULL;
-    volatile uint32_t *p_BmiNia = NULL;
-    uint32_t ccTreePhysOffset;
-
-    SANITY_CHECK_RETURN_ERROR(h_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(h_CcTree, E_INVALID_HANDLE);
-
-    if (p_FmPort->imEn)
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for non-independent mode ports only"));
-
-    /* get PCD registers pointers */
-    switch (p_FmPort->portType)
-    {
-        case (e_FM_PORT_TYPE_RX_10G):
-        case (e_FM_PORT_TYPE_RX):
-            p_BmiNia = &p_FmPort->port.bmi_regs->rx.fmbm_rfne;
-            break;
-        case (e_FM_PORT_TYPE_OH_OFFLINE_PARSING):
-            p_BmiNia = &p_FmPort->port.bmi_regs->oh.fmbm_ofne;
-            break;
-        default:
-            RETURN_ERROR( MAJOR, E_INVALID_OPERATION,
-                         ("available for Rx and offline parsing ports only"));
-    }
-
-    /* check that current NIA is BMI to BMI */
-    if ((GET_UINT32(*p_BmiNia) & ~BMI_RFNE_FDCS_MASK)
-            != GET_NIA_BMI_AC_ENQ_FRAME(p_FmPort->h_FmPcd))
-        RETURN_ERROR( MAJOR, E_INVALID_OPERATION,
-                     ("may be called only for ports in BMI-to-BMI state."));
-
-    if (p_FmPort->pcdEngines & FM_PCD_CC)
-    {
-        if (p_FmPort->h_IpReassemblyManip)
-        {
-            err = FmPcdCcTreeAddIPR(p_FmPort->h_FmPcd, h_CcTree, NULL,
-                                    p_FmPort->h_IpReassemblyManip, FALSE);
-            if (err != E_OK)
-            {
-                RETURN_ERROR(MAJOR, err, NO_MSG);
-            }
-        }
-        else
-            if (p_FmPort->h_CapwapReassemblyManip)
-            {
-                err = FmPcdCcTreeAddCPR(p_FmPort->h_FmPcd, h_CcTree, NULL,
-                                        p_FmPort->h_CapwapReassemblyManip,
-                                        FALSE);
-                if (err != E_OK)
-                {
-                    RETURN_ERROR(MAJOR, err, NO_MSG);
-                }
-            }
-        switch (p_FmPort->portType)
-        {
-            case (e_FM_PORT_TYPE_RX_10G):
-            case (e_FM_PORT_TYPE_RX):
-                p_BmiCcBase = &p_FmPort->port.bmi_regs->rx.fmbm_rccb;
-                break;
-            case (e_FM_PORT_TYPE_OH_OFFLINE_PARSING):
-                p_BmiCcBase = &p_FmPort->port.bmi_regs->oh.fmbm_occb;
-                break;
-            default:
-                RETURN_ERROR(MAJOR, E_INVALID_STATE, ("Invalid port type"));
-        }
-
-        if (!TRY_LOCK(p_FmPort->h_Spinlock, &p_FmPort->lock))
-        {
-            DBG(TRACE, ("FM Port Try Lock - BUSY"));
-            return ERROR_CODE(E_BUSY);
-        }
-        err = FmPcdCcBindTree(p_FmPort->h_FmPcd, NULL, h_CcTree,
-                              &ccTreePhysOffset, h_FmPort);
-        if (err)
-        {
-            RELEASE_LOCK(p_FmPort->lock);
-            RETURN_ERROR(MAJOR, err, NO_MSG);
-        }WRITE_UINT32(*p_BmiCcBase, ccTreePhysOffset);
-
-        p_FmPort->ccTreeId = h_CcTree;
-        RELEASE_LOCK(p_FmPort->lock);
-    }
-    else
-        RETURN_ERROR( MAJOR, E_INVALID_STATE,
-                     ("Coarse Classification not defined for this port."));
-
-    return E_OK;
-}
-
-t_Error FM_PORT_AttachPCD(t_Handle h_FmPort)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    t_Error err = E_OK;
-
-    SANITY_CHECK_RETURN_ERROR(h_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-
-    if (p_FmPort->imEn)
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for non-independent mode ports only"));
-
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_RX)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_OH_OFFLINE_PARSING))
-        RETURN_ERROR( MAJOR, E_INVALID_OPERATION,
-                     ("available for Rx and offline parsing ports only"));
-
-    if (!TRY_LOCK(p_FmPort->h_Spinlock, &p_FmPort->lock))
-    {
-        DBG(TRACE, ("FM Port Try Lock - BUSY"));
-        return ERROR_CODE(E_BUSY);
-    }
-
-    if (p_FmPort->h_ReassemblyTree)
-        p_FmPort->pcdEngines |= FM_PCD_CC;
-
-    err = AttachPCD(h_FmPort);
-    RELEASE_LOCK(p_FmPort->lock);
-
-    return err;
 }
 
 t_Error FM_PORT_DetachPCD(t_Handle h_FmPort)
@@ -4811,6 +3303,18 @@ t_Error FM_PORT_DetachPCD(t_Handle h_FmPort)
         return ERROR_CODE(E_BUSY);
     }
 
+    if (!p_FmPort->pcdConfigured)
+    {
+        /* A port without a policy already uses its default path. Keep
+         * incomplete setup/cleanup failures distinct from this no-op. */
+        bool unconfigured = !p_FmPort->pcdEngines && !p_FmPort->pcdNetEnvOwner;
+
+        RELEASE_LOCK(p_FmPort->lock);
+        if (unconfigured)
+            return E_OK;
+        RETURN_ERROR(MAJOR, E_INVALID_STATE, ("PCD setup is not complete"));
+    }
+
     err = DetachPCD(h_FmPort);
     if (err != E_OK)
     {
@@ -4818,10 +3322,63 @@ t_Error FM_PORT_DetachPCD(t_Handle h_FmPort)
         RETURN_ERROR(MAJOR, err, NO_MSG);
     }
 
-    if (p_FmPort->h_ReassemblyTree)
-        p_FmPort->pcdEngines &= ~FM_PCD_CC;
     RELEASE_LOCK(p_FmPort->lock);
 
+    return E_OK;
+}
+
+t_Error FM_PORT_BypassPCD(t_Handle h_FmPort, bool bypass)
+{
+    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
+    t_Error err = E_OK;
+
+    SANITY_CHECK_RETURN_ERROR(h_FmPort, E_INVALID_HANDLE);
+    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
+
+    if (p_FmPort->imEn)
+        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
+                     ("available for non-independent mode ports only"));
+
+    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G)
+            && (p_FmPort->portType != e_FM_PORT_TYPE_RX)
+            && (p_FmPort->portType != e_FM_PORT_TYPE_OH_OFFLINE_PARSING))
+        RETURN_ERROR( MAJOR, E_INVALID_OPERATION,
+                     ("available for Rx and offline parsing ports only"));
+
+    if (!TRY_LOCK(p_FmPort->h_Spinlock, &p_FmPort->lock))
+    {
+        DBG(TRACE, ("FM Port Try Lock - BUSY"));
+        return ERROR_CODE(E_BUSY);
+    }
+
+    /* Switched only while the port takes no frame, so none sees half of
+     * either set of registers and none needs a barrier to finish. */
+    if (!p_FmPort->pcdConfigured || p_FmPort->enabled)
+    {
+        RELEASE_LOCK(p_FmPort->lock);
+        RETURN_ERROR(MAJOR, E_INVALID_STATE,
+                     ("PCD not configured, or the port is enabled"));
+    }
+
+    /* The flag follows the entry register: once new frames bypass the PCD,
+     * a later call with bypass false gives it back, even if the rest of
+     * the bypass failed. AttachPCD() writes that register last. */
+    if (bypass && !p_FmPort->pcdBypassed)
+    {
+        DetachPCDEntry(p_FmPort);
+        p_FmPort->pcdBypassed = TRUE;
+        err = DetachPCDActions(p_FmPort);
+    }
+    else if (!bypass && p_FmPort->pcdBypassed)
+    {
+        err = AttachPCD(p_FmPort);
+        if (err == E_OK)
+            p_FmPort->pcdBypassed = FALSE;
+    }
+
+    RELEASE_LOCK(p_FmPort->lock);
+    if (err != E_OK)
+        RETURN_ERROR(MAJOR, err, NO_MSG);
     return E_OK;
 }
 
@@ -4853,11 +3410,11 @@ static int FM_PORT_ConfigureMuramPage(t_Handle h_FmPort)
 	if (err)
 		return err;
 
-	/* Allocate a MURAM page which will be used by the microcode
-	 * for IP reassembly.
-	 */
-	FmPortSetGprFunc(p_FmPort, e_FM_PORT_GPR_MURAM_PAGE,
+	/* Allocate the microcode control page for offload and VSP settings. */
+	err = FmPortSetGprFunc(p_FmPort, e_FM_PORT_GPR_MURAM_PAGE,
 			 (void**)&p_ParamsPage);
+	if (err)
+		return err;
 	ASSERT_COND(p_ParamsPage);
 
 	if (FmPcdIsAdvancedOffloadSupported(p_FmPort->h_FmPcd)) {
@@ -4866,189 +3423,113 @@ static int FM_PORT_ConfigureMuramPage(t_Handle h_FmPort)
 			     FM_CTL_PARAMS_PAGE_OFFLOAD_SUPPORT_EN);
 	}
 
-	/* For OH ports, communicate the discard mask to the microcode
-	 * through the MURAM page
-	 */
-	if (p_FmPort->h_IpReassemblyManip || p_FmPort->h_CapwapReassemblyManip) {
-		if (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING) {
-			WRITE_UINT32(p_ParamsPage->discardMask,
-				     GET_UINT32(p_FmPort->p_FmPortBmiRegs->ohPortBmiRegs.fmbm_ofsdm));
-		} else {
-			WRITE_UINT32(p_ParamsPage->discardMask,
-				     GET_UINT32(p_FmPort->p_FmPortBmiRegs->rxPortBmiRegs.fmbm_rfsdm));
-		}
-	}
-#ifdef FM_ERROR_VSP_NO_MATCH_SW006
 	if (p_FmPort->vspe) {
 		WRITE_UINT32(p_ParamsPage->misc,
 			     GET_UINT32(p_ParamsPage->misc) |
 			     (p_FmPort->dfltRelativeId & FM_CTL_PARAMS_PAGE_ERROR_VSP_MASK));
 	}
-#endif /* FM_ERROR_VSP_NO_MATCH_SW006 */
 
 	return 0;
 }
 
+/* The port is detached (or setup never attached it). Keep every remaining
+ * owner recorded if cleanup fails so DeletePCD or the next SetPCD can retry.
+ * Hold all PCD object locks while removing bindings. Release them before
+ * deleting private objects: the SDK returns their locks to its reuse pool
+ * without clearing the flags. */
+static t_Error DeletePortPcd(t_FmPort *p_FmPort, bool *allLocked)
+{
+    t_Error err;
+
+    err = DeletePcd(p_FmPort);
+    if (err)
+        return err;
+    if (*allLocked)
+    {
+        FmPcdLockUnlockAll(p_FmPort->h_FmPcd);
+        *allLocked = FALSE;
+    }
+    if (p_FmPort->pcdNetEnvOwner)
+    {
+        FmPcdDecNetEnvOwners(p_FmPort->h_FmPcd, p_FmPort->netEnvId);
+        p_FmPort->pcdNetEnvOwner = FALSE;
+    }
+    p_FmPort->requiredAction = 0;
+    p_FmPort->pcdConfigured = FALSE;
+    return E_OK;
+}
+
 t_Error FM_PORT_SetPCD(t_Handle h_FmPort, t_FmPortPcdParams *p_PcdParam)
 {
-	t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-	t_Error err = E_OK;
-	t_FmPortPcdParams modifiedPcdParams, *p_PcdParams;
-	t_FmPcdCcTreeParams *p_FmPcdCcTreeParams;
-	t_FmPortPcdCcParams fmPortPcdCcParams;
-	t_FmPortGetSetCcParams fmPortGetSetCcParams;
+    t_FmPort *p_FmPort = (t_FmPort *)h_FmPort;
+    t_Error err = E_OK, cleanupErr;
+    t_FmPortPcdParams modifiedPcdParams, *p_PcdParams = &modifiedPcdParams;
+    t_FmPortGetSetCcParams fmPortGetSetCcParams;
+    bool allLocked = FALSE;
 
-	SANITY_CHECK_RETURN_ERROR(h_FmPort, E_INVALID_HANDLE);
-	SANITY_CHECK_RETURN_ERROR(p_PcdParam, E_NULL_POINTER);
-	SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
+    SANITY_CHECK_RETURN_ERROR(h_FmPort, E_INVALID_HANDLE);
+    SANITY_CHECK_RETURN_ERROR(p_PcdParam, E_NULL_POINTER);
+    if (p_PcdParam->h_IpReassemblyManip || p_PcdParam->h_CapwapReassemblyManip)
+        RETURN_ERROR(MAJOR, E_NOT_SUPPORTED, ("Hardware reassembly is unsupported in Mono"));
+    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
+    if (p_FmPort->imEn)
+        RETURN_ERROR(MAJOR, E_INVALID_OPERATION, ("Not available in independent mode"));
+    if (p_FmPort->portType != e_FM_PORT_TYPE_RX_10G &&
+        p_FmPort->portType != e_FM_PORT_TYPE_RX &&
+        p_FmPort->portType != e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
+        RETURN_ERROR(MAJOR, E_INVALID_OPERATION, ("Available for Rx and offline ports only"));
 
-	if (p_FmPort->imEn) {
-		RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-			     ("available for non-independent mode ports only"));
-	}
+    /* Validate combinations before acquiring the port lock or saving handles. */
+    if (!p_PcdParam->h_NetEnv)
+        RETURN_ERROR(MAJOR, E_INVALID_HANDLE, ("Network environment is required"));
+    if (p_PcdParam->p_CcParams && !p_PcdParam->p_CcParams->h_CcTree)
+        RETURN_ERROR(MAJOR, E_INVALID_HANDLE, ("Tree handle is required for CC"));
+    if (!TRY_LOCK(p_FmPort->h_Spinlock, &p_FmPort->lock))
+        return ERROR_CODE(E_BUSY);
+    if (p_FmPort->pcdConfigured)
+    {
+        err = ERROR_CODE(E_INVALID_STATE);
+        goto out;
+    }
+    p_FmPort->h_FmPcd = FmGetPcdHandle(p_FmPort->h_Fm);
+    ASSERT_COND(p_FmPort->h_FmPcd);
 
-	if (p_FmPort->portType != e_FM_PORT_TYPE_RX_10G &&
-	    p_FmPort->portType != e_FM_PORT_TYPE_RX &&
-	    p_FmPort->portType != e_FM_PORT_TYPE_OH_OFFLINE_PARSING) {
-		RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-			     ("available for Rx and offline parsing ports only"));
-	}
+    /* A previous rollback may have retained ownership after a second error. */
+    if (p_FmPort->pcdNetEnvOwner || p_FmPort->pcdEngines)
+    {
+        if (!FmPcdLockTryLockAll(p_FmPort->h_FmPcd))
+        {
+            err = ERROR_CODE(E_BUSY);
+            goto out;
+        }
+        allLocked = TRUE;
+        err = DeletePortPcd(p_FmPort, &allLocked);
+        if (err)
+            goto out;
+    }
 
-	if (!TRY_LOCK(p_FmPort->h_Spinlock, &p_FmPort->lock)) {
-		DBG(TRACE, ("FM Port Try Lock - BUSY"));
-		return ERROR_CODE(E_BUSY);
-	}
-
-	p_FmPort->h_FmPcd = FmGetPcdHandle(p_FmPort->h_Fm);
-	ASSERT_COND(p_FmPort->h_FmPcd);
-
-	if (p_PcdParam->p_CcParams && !p_PcdParam->p_CcParams->h_CcTree) {
-		RETURN_ERROR(MAJOR, E_INVALID_HANDLE,
-			     ("Tree handle must be given if CC is required"));
-	}
-
-	memcpy(&modifiedPcdParams, p_PcdParam, sizeof(t_FmPortPcdParams));
-	p_PcdParams = &modifiedPcdParams;
-	if (p_PcdParams->h_IpReassemblyManip ||
-	    p_PcdParams->h_CapwapReassemblyManip) {
-		if (p_PcdParams->pcdSupport != e_FM_PORT_PCD_SUPPORT_PRS_AND_KG &&
-		    p_PcdParams->pcdSupport != e_FM_PORT_PCD_SUPPORT_PRS_AND_KG_AND_CC &&
-		    p_PcdParams->pcdSupport != e_FM_PORT_PCD_SUPPORT_PRS_AND_KG_AND_CC_AND_PLCR &&
-		    p_PcdParams->pcdSupport != e_FM_PORT_PCD_SUPPORT_PRS_AND_KG_AND_PLCR) {
-			RELEASE_LOCK(p_FmPort->lock);
-			RETURN_ERROR(MAJOR, E_INVALID_STATE,
-				     ("pcdSupport must have KG for supporting Reassembly"));
-		}
-		p_FmPort->h_IpReassemblyManip = p_PcdParams->h_IpReassemblyManip;
-		if (p_PcdParams->h_IpReassemblyManip && p_PcdParams->h_CapwapReassemblyManip) {
-			RETURN_ERROR(MAJOR, E_INVALID_STATE,
-				     ("Either IP-R or CAPWAP-R is allowed"));
-		}
-		if (p_PcdParams->h_CapwapReassemblyManip &&
-		    p_FmPort->portType != e_FM_PORT_TYPE_OH_OFFLINE_PARSING) {
-			RETURN_ERROR(MAJOR, E_INVALID_STATE,
-				     ("CAPWAP-R is allowed only on offline-port"));
-		}
-		if (p_PcdParams->h_CapwapReassemblyManip)
-			p_FmPort->h_CapwapReassemblyManip = p_PcdParams->h_CapwapReassemblyManip;
-
-		if (!p_PcdParams->p_CcParams) {
-			if (!(p_PcdParams->pcdSupport == e_FM_PORT_PCD_SUPPORT_PRS_AND_KG ||
-			      p_PcdParams->pcdSupport == e_FM_PORT_PCD_SUPPORT_PRS_AND_KG_AND_PLCR)) {
-				RELEASE_LOCK(p_FmPort->lock);
-				RETURN_ERROR(MAJOR, E_INVALID_STATE,
-					     ("PCD initialization structure is not consistent with pcdSupport"));
-			}
-
-			/* No user-tree, need to build internal tree */
-			p_FmPcdCcTreeParams = (t_FmPcdCcTreeParams*)XX_Malloc(sizeof(t_FmPcdCcTreeParams));
-			if (!p_FmPcdCcTreeParams)
-				RETURN_ERROR(MAJOR, E_NO_MEMORY, ("p_FmPcdCcTreeParams"));
-
-			memset(p_FmPcdCcTreeParams, 0, sizeof(t_FmPcdCcTreeParams));
-			p_FmPcdCcTreeParams->h_NetEnv = p_PcdParams->h_NetEnv;
-
-			p_FmPort->h_ReassemblyTree = FM_PCD_CcRootBuild(p_FmPort->h_FmPcd,
-									p_FmPcdCcTreeParams);
-			if (!p_FmPort->h_ReassemblyTree) {
-				RELEASE_LOCK(p_FmPort->lock);
-				XX_Free(p_FmPcdCcTreeParams);
-				RETURN_ERROR(MAJOR, E_INVALID_HANDLE,
-					     ("FM_PCD_CcBuildTree for Reassembly failed"));
-			}
-			if (p_PcdParams->pcdSupport == e_FM_PORT_PCD_SUPPORT_PRS_AND_KG)
-				p_PcdParams->pcdSupport = e_FM_PORT_PCD_SUPPORT_PRS_AND_KG_AND_CC;
-			else
-				p_PcdParams->pcdSupport = e_FM_PORT_PCD_SUPPORT_PRS_AND_KG_AND_CC_AND_PLCR;
-
-			memset(&fmPortPcdCcParams, 0, sizeof(t_FmPortPcdCcParams));
-			fmPortPcdCcParams.h_CcTree = p_FmPort->h_ReassemblyTree;
-			p_PcdParams->p_CcParams = &fmPortPcdCcParams;
-			XX_Free(p_FmPcdCcTreeParams);
-		}
-
-		if (p_FmPort->h_IpReassemblyManip) {
-			err = FmPcdCcTreeAddIPR(p_FmPort->h_FmPcd,
-						p_PcdParams->p_CcParams->h_CcTree,
-						p_PcdParams->h_NetEnv,
-						p_FmPort->h_IpReassemblyManip, TRUE);
-		} else if (p_FmPort->h_CapwapReassemblyManip) {
-			err = FmPcdCcTreeAddCPR(p_FmPort->h_FmPcd,
-						p_PcdParams->p_CcParams->h_CcTree,
-						p_PcdParams->h_NetEnv,
-						p_FmPort->h_CapwapReassemblyManip,
-						TRUE);
-		}
-		if (err != E_OK) {
-			if (p_FmPort->h_ReassemblyTree) {
-				FM_PCD_CcRootDelete(p_FmPort->h_ReassemblyTree);
-				p_FmPort->h_ReassemblyTree = NULL;
-			}
-			RELEASE_LOCK(p_FmPort->lock);
-			RETURN_ERROR(MAJOR, err, NO_MSG);
-		}
-	}
-
-	if (!FmPcdLockTryLockAll(p_FmPort->h_FmPcd)) {
-		if (p_FmPort->h_ReassemblyTree) {
-			FM_PCD_CcRootDelete(p_FmPort->h_ReassemblyTree);
-			p_FmPort->h_ReassemblyTree = NULL;
-		}
-		RELEASE_LOCK(p_FmPort->lock);
-		DBG(TRACE, ("Try LockAll - BUSY"));
-		return ERROR_CODE(E_BUSY);
-	}
-
-	err = SetPcd(h_FmPort, p_PcdParams);
-	if (err) {
-		if (p_FmPort->h_ReassemblyTree) {
-			FM_PCD_CcRootDelete(p_FmPort->h_ReassemblyTree);
-			p_FmPort->h_ReassemblyTree = NULL;
-		}
-		FmPcdLockUnlockAll(p_FmPort->h_FmPcd);
-		RELEASE_LOCK(p_FmPort->lock);
-		RETURN_ERROR(MAJOR, err, NO_MSG);
-	}
-
-	if ((p_FmPort->pcdEngines & FM_PCD_PRS) &&
-	    p_PcdParams->p_PrsParams->includeInPrsStatistics) {
-		err = FmPcdPrsIncludePortInStatistics(p_FmPort->h_FmPcd,
-						      p_FmPort->hardwarePortId,
-						      TRUE);
-		if (err) {
-			DeletePcd(p_FmPort);
-			if (p_FmPort->h_ReassemblyTree) {
-				FM_PCD_CcRootDelete(p_FmPort->h_ReassemblyTree);
-				p_FmPort->h_ReassemblyTree = NULL;
-			}
-			FmPcdLockUnlockAll(p_FmPort->h_FmPcd);
-			RELEASE_LOCK(p_FmPort->lock);
-			RETURN_ERROR(MAJOR, err, NO_MSG);
-		}
-		p_FmPort->includeInPrsStatistics = TRUE;
-	}
-
-	FmPcdIncNetEnvOwners(p_FmPort->h_FmPcd, p_FmPort->netEnvId);
+    modifiedPcdParams = *p_PcdParam;
+    p_FmPort->netEnvId = FmPcdGetNetEnvId(p_PcdParams->h_NetEnv);
+    FmPcdIncNetEnvOwners(p_FmPort->h_FmPcd, p_FmPort->netEnvId);
+    p_FmPort->pcdNetEnvOwner = TRUE;
+    if (!FmPcdLockTryLockAll(p_FmPort->h_FmPcd))
+    {
+        err = ERROR_CODE(E_BUSY);
+        goto fail;
+    }
+    allLocked = TRUE;
+    err = SetPcd(p_FmPort, p_PcdParams);
+    if (err)
+        goto fail;
+    if ((p_FmPort->pcdEngines & FM_PCD_PRS) &&
+        p_PcdParams->p_PrsParams->includeInPrsStatistics)
+    {
+        err = FmPcdPrsIncludePortInStatistics(p_FmPort->h_FmPcd,
+                                             p_FmPort->hardwarePortId, TRUE);
+        if (err)
+            goto fail;
+        p_FmPort->includeInPrsStatistics = TRUE;
+    }
 
 	if (FmPcdIsAdvancedOffloadSupported(p_FmPort->h_FmPcd)) {
 		memset(&fmPortGetSetCcParams, 0, sizeof(t_FmPortGetSetCcParams));
@@ -5056,22 +3537,11 @@ t_Error FM_PORT_SetPCD(t_Handle h_FmPort, t_FmPortPcdParams *p_PcdParam)
 		if (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING) {
 			t_FmPcdCtrlParamsPage *p_ParamsPage;
 
-#ifdef FM_KG_ERASE_FLOW_ID_ERRATA_FMAN_SW004
-			if (p_FmPort->fmRevInfo.majorRev < 6 &&
-			    p_FmPort->pcdEngines & FM_PCD_KG) {
-				int i;
 
-				for (i = 0; i < p_PcdParams->p_KgParams->numOfSchemes; i++) {
-					/* The following function must be locked */
-					FmPcdKgCcGetSetParams(p_FmPort->h_FmPcd,
-							      p_PcdParams->p_KgParams->h_Schemes[i],
-							      UPDATE_KG_NIA_CC_WA, 0);
-				}
-			}
-#endif /* FM_KG_ERASE_FLOW_ID_ERRATA_FMAN_SW004 */
-
-			FmPortSetGprFunc(p_FmPort, e_FM_PORT_GPR_MURAM_PAGE,
+			err = FmPortSetGprFunc(p_FmPort, e_FM_PORT_GPR_MURAM_PAGE,
 					 (void**)&p_ParamsPage);
+			if (err)
+			goto fail;
 			ASSERT_COND(p_ParamsPage);
 			WRITE_UINT32(p_ParamsPage->postBmiFetchNia, p_FmPort->savedBmiNia);
 
@@ -5085,400 +3555,83 @@ t_Error FM_PORT_SetPCD(t_Handle h_FmPort, t_FmPortPcdParams *p_PcdParam)
 							       NIA_ENG_FM_CTL;
 
 			err = FmPortGetSetCcParams(p_FmPort, &fmPortGetSetCcParams);
-			if (err != E_OK) {
-				DeletePcd(p_FmPort);
-				if (p_FmPort->h_ReassemblyTree) {
-					FM_PCD_CcRootDelete(p_FmPort->h_ReassemblyTree);
-					p_FmPort->h_ReassemblyTree = NULL;
-				}
-				FmPcdLockUnlockAll(p_FmPort->h_FmPcd);
-				RELEASE_LOCK(p_FmPort->lock);
-				RETURN_ERROR(MAJOR, err, NO_MSG);
-			}
+			if (err)
+			goto fail;
 		}
 
-		FmPcdLockUnlockAll(p_FmPort->h_FmPcd);
-
-		/* Set pop-to-next-step nia */
-		fmPortGetSetCcParams.getCcParams.type = GET_NIA_FPNE;
-		err = FmPortGetSetCcParams(h_FmPort, &fmPortGetSetCcParams);
-		if (err != E_OK) {
-			DeletePcd(p_FmPort);
-			if (p_FmPort->h_ReassemblyTree) {
-				FM_PCD_CcRootDelete(p_FmPort->h_ReassemblyTree);
-				p_FmPort->h_ReassemblyTree = NULL;
-			}
-			RELEASE_LOCK(p_FmPort->lock);
-			RETURN_ERROR(MAJOR, err, NO_MSG);
-		}
 
 		/* Set post-bmi-prepare-to-enq nia */
 		fmPortGetSetCcParams.setCcParams.type = UPDATE_NIA_FENE;
 		fmPortGetSetCcParams.setCcParams.nia = NIA_FM_CTL_AC_POST_BMI_ENQ | NIA_ENG_FM_CTL;
 
 		err = FmPortGetSetCcParams(h_FmPort, &fmPortGetSetCcParams);
-		if (err != E_OK) {
-			DeletePcd(p_FmPort);
-			if (p_FmPort->h_ReassemblyTree) {
-				FM_PCD_CcRootDelete(p_FmPort->h_ReassemblyTree);
-				p_FmPort->h_ReassemblyTree = NULL;
-			}
-			RELEASE_LOCK(p_FmPort->lock);
-			RETURN_ERROR(MAJOR, err, NO_MSG);
-		}
+		if (err)
+			goto fail;
 
-		if (p_FmPort->h_IpReassemblyManip || p_FmPort->h_CapwapReassemblyManip) {
-			/* Set the ORR bit (for order-restoration) */
-			fmPortGetSetCcParams.setCcParams.type = UPDATE_NIA_FPNE;
-			fmPortGetSetCcParams.setCcParams.nia = fmPortGetSetCcParams.getCcParams.nia |
-							       NIA_ORDER_RESTOR;
 
-			err = FmPortGetSetCcParams(h_FmPort, &fmPortGetSetCcParams);
-			if (err != E_OK) {
-				DeletePcd(p_FmPort);
-				if (p_FmPort->h_ReassemblyTree) {
-					FM_PCD_CcRootDelete(p_FmPort->h_ReassemblyTree);
-					p_FmPort->h_ReassemblyTree = NULL;
-				}
-				RELEASE_LOCK(p_FmPort->lock);
-				RETURN_ERROR(MAJOR, err, NO_MSG);
-			}
-		}
-	} else {
-		FmPcdLockUnlockAll(p_FmPort->h_FmPcd);
 	}
 
-	err = FM_PORT_ConfigureMuramPage(h_FmPort);
-	if (err) {
-		DeletePcd(p_FmPort);
-		if (p_FmPort->h_ReassemblyTree) {
-			FM_PCD_CcRootDelete(p_FmPort->h_ReassemblyTree);
-			p_FmPort->h_ReassemblyTree = NULL;
-		}
-		RELEASE_LOCK(p_FmPort->lock);
-		RETURN_ERROR(MAJOR, err, NO_MSG);
-	}
+    err = FM_PORT_ConfigureMuramPage(p_FmPort);
+    if (err)
+        goto fail;
+    err = AttachPCD(p_FmPort);
+    if (err)
+        goto fail;
+    p_FmPort->pcdConfigured = TRUE;
+    goto out;
 
-	err = AttachPCD(h_FmPort);
-	if (err) {
-		DeletePcd(p_FmPort);
-		if (p_FmPort->h_ReassemblyTree) {
-			FM_PCD_CcRootDelete(p_FmPort->h_ReassemblyTree);
-			p_FmPort->h_ReassemblyTree = NULL;
-		}
-		RELEASE_LOCK(p_FmPort->lock);
-		RETURN_ERROR(MAJOR, err, NO_MSG);
-	}
-
-	RELEASE_LOCK(p_FmPort->lock);
-
-	return err;
+fail:
+    cleanupErr = DeletePortPcd(p_FmPort, &allLocked);
+    if (cleanupErr)
+        REPORT_ERROR(MAJOR, cleanupErr, ("Port PCD cleanup is pending; retry delete or setup"));
+out:
+    if (allLocked)
+        FmPcdLockUnlockAll(p_FmPort->h_FmPcd);
+    RELEASE_LOCK(p_FmPort->lock);
+    return err;
 }
 
 t_Error FM_PORT_DeletePCD(t_Handle h_FmPort)
 {
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    t_Error err = E_OK;
+    t_FmPort *p_FmPort = (t_FmPort *)h_FmPort;
+    t_Error err;
+    bool allLocked = FALSE;
 
     SANITY_CHECK_RETURN_ERROR(h_FmPort, E_INVALID_HANDLE);
     SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-
     if (p_FmPort->imEn)
-        RETURN_ERROR(MAJOR, E_INVALID_OPERATION,
-                     ("available for non-independant mode ports only"));
-
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_RX)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_OH_OFFLINE_PARSING))
-        RETURN_ERROR( MAJOR, E_INVALID_OPERATION,
-                     ("available for Rx and offline parsing ports only"));
-
+        RETURN_ERROR(MAJOR, E_INVALID_OPERATION, ("Not available in independent mode"));
+    if (p_FmPort->portType != e_FM_PORT_TYPE_RX_10G &&
+        p_FmPort->portType != e_FM_PORT_TYPE_RX &&
+        p_FmPort->portType != e_FM_PORT_TYPE_OH_OFFLINE_PARSING)
+        RETURN_ERROR(MAJOR, E_INVALID_OPERATION, ("Available for Rx and offline ports only"));
     if (!TRY_LOCK(p_FmPort->h_Spinlock, &p_FmPort->lock))
-    {
-        DBG(TRACE, ("FM Port Try Lock - BUSY"));
         return ERROR_CODE(E_BUSY);
-    }
-
-    err = DetachPCD(h_FmPort);
-    if (err)
+    if (!p_FmPort->pcdNetEnvOwner && !p_FmPort->pcdEngines)
     {
-        RELEASE_LOCK(p_FmPort->lock);
-        RETURN_ERROR(MAJOR, err, NO_MSG);
+        err = ERROR_CODE(E_INVALID_STATE);
+        goto out;
     }
-
-    FmPcdDecNetEnvOwners(p_FmPort->h_FmPcd, p_FmPort->netEnvId);
-
-    /* we do it anyway, instead of checking if included */
-    if ((p_FmPort->pcdEngines & FM_PCD_PRS) && p_FmPort->includeInPrsStatistics)
-    {
-        FmPcdPrsIncludePortInStatistics(p_FmPort->h_FmPcd,
-                                        p_FmPort->hardwarePortId, FALSE);
-        p_FmPort->includeInPrsStatistics = FALSE;
-    }
-
+    /* A refused lock must not detach the port or consume any references. */
     if (!FmPcdLockTryLockAll(p_FmPort->h_FmPcd))
     {
-        RELEASE_LOCK(p_FmPort->lock);
-        DBG(TRACE, ("Try LockAll - BUSY"));
-        return ERROR_CODE(E_BUSY);
+        err = ERROR_CODE(E_BUSY);
+        goto out;
     }
-
-    err = DeletePcd(h_FmPort);
-    FmPcdLockUnlockAll(p_FmPort->h_FmPcd);
-    if (err)
+    allLocked = TRUE;
+    if (p_FmPort->pcdConfigured)
     {
-        RELEASE_LOCK(p_FmPort->lock);
-        RETURN_ERROR(MAJOR, err, NO_MSG);
-    }
-
-    if (p_FmPort->h_ReassemblyTree)
-    {
-        err = FM_PCD_CcRootDelete(p_FmPort->h_ReassemblyTree);
+        err = DetachPCD(p_FmPort);
         if (err)
-        {
-            RELEASE_LOCK(p_FmPort->lock);
-            RETURN_ERROR(MAJOR, err, NO_MSG);
-        }
-        p_FmPort->h_ReassemblyTree = NULL;
-    }RELEASE_LOCK(p_FmPort->lock);
-
-    return err;
-}
-
-t_Error FM_PORT_PcdKgBindSchemes(t_Handle h_FmPort,
-                                 t_FmPcdPortSchemesParams *p_PortScheme)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    t_FmPcdKgInterModuleBindPortToSchemes schemeBind;
-    t_Error err = E_OK;
-    uint32_t tmpScmVec = 0;
-    int i;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->pcdEngines & FM_PCD_KG,
-                              E_INVALID_STATE);
-
-    schemeBind.netEnvId = p_FmPort->netEnvId;
-    schemeBind.hardwarePortId = p_FmPort->hardwarePortId;
-    schemeBind.numOfSchemes = p_PortScheme->numOfSchemes;
-    schemeBind.useClsPlan = p_FmPort->useClsPlan;
-    for (i = 0; i < schemeBind.numOfSchemes; i++)
-    {
-        schemeBind.schemesIds[i] = FmPcdKgGetSchemeId(
-                p_PortScheme->h_Schemes[i]);
-        /* build vector */
-        tmpScmVec |= 1 << (31 - (uint32_t)schemeBind.schemesIds[i]);
+            goto unlock;
+        p_FmPort->pcdConfigured = FALSE;
     }
-
-    if (!TRY_LOCK(p_FmPort->h_Spinlock, &p_FmPort->lock))
-    {
-        DBG(TRACE, ("FM Port Try Lock - BUSY"));
-        return ERROR_CODE(E_BUSY);
-    }
-
-    err = FmPcdKgBindPortToSchemes(p_FmPort->h_FmPcd, &schemeBind);
-    if (err == E_OK)
-        p_FmPort->schemesPerPortVector |= tmpScmVec;
-
-#ifdef FM_KG_ERASE_FLOW_ID_ERRATA_FMAN_SW004
-    if ((FmPcdIsAdvancedOffloadSupported(p_FmPort->h_FmPcd)) &&
-            (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING) &&
-            (p_FmPort->fmRevInfo.majorRev < 6))
-    {
-        for (i=0; i<p_PortScheme->numOfSchemes; i++)
-        FmPcdKgCcGetSetParams(p_FmPort->h_FmPcd, p_PortScheme->h_Schemes[i], UPDATE_KG_NIA_CC_WA, 0);
-    }
-#endif /* FM_KG_ERASE_FLOW_ID_ERRATA_FMAN_SW004 */
-
+    err = DeletePortPcd(p_FmPort, &allLocked);
+unlock:
+    if (allLocked)
+        FmPcdLockUnlockAll(p_FmPort->h_FmPcd);
+out:
     RELEASE_LOCK(p_FmPort->lock);
-
     return err;
 }
 
-t_Error FM_PORT_PcdKgUnbindSchemes(t_Handle h_FmPort,
-                                   t_FmPcdPortSchemesParams *p_PortScheme)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    t_FmPcdKgInterModuleBindPortToSchemes schemeBind;
-    t_Error err = E_OK;
-    uint32_t tmpScmVec = 0;
-    int i;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(!p_FmPort->p_FmPortDriverParam, E_INVALID_STATE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->pcdEngines & FM_PCD_KG,
-                              E_INVALID_STATE);
-
-    schemeBind.netEnvId = p_FmPort->netEnvId;
-    schemeBind.hardwarePortId = p_FmPort->hardwarePortId;
-    schemeBind.numOfSchemes = p_PortScheme->numOfSchemes;
-    for (i = 0; i < schemeBind.numOfSchemes; i++)
-    {
-        schemeBind.schemesIds[i] = FmPcdKgGetSchemeId(
-                p_PortScheme->h_Schemes[i]);
-        /* build vector */
-        tmpScmVec |= 1 << (31 - (uint32_t)schemeBind.schemesIds[i]);
-    }
-
-    if (!TRY_LOCK(p_FmPort->h_Spinlock, &p_FmPort->lock))
-    {
-        DBG(TRACE, ("FM Port Try Lock - BUSY"));
-        return ERROR_CODE(E_BUSY);
-    }
-
-    err = FmPcdKgUnbindPortToSchemes(p_FmPort->h_FmPcd, &schemeBind);
-    if (err == E_OK)
-        p_FmPort->schemesPerPortVector &= ~tmpScmVec;
-    RELEASE_LOCK(p_FmPort->lock);
-
-    return err;
-}
-
-t_Error FM_PORT_AddCongestionGrps(t_Handle h_FmPort,
-                                  t_FmPortCongestionGrps *p_CongestionGrps)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    uint8_t priorityTmpArray[FM_PORT_NUM_OF_CONGESTION_GRPS];
-    uint8_t mod, index;
-    uint32_t i, grpsMap[FMAN_PORT_CG_MAP_NUM];
-    int err;
-    int j;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-
-    /* un-necessary check of the indexes; probably will be needed in the future when there
-     will be more CGs available ....
-     for (i=0; i<p_CongestionGrps->numOfCongestionGrpsToConsider; i++)
-     if (p_CongestionGrps->congestionGrpsToConsider[i] >= FM_PORT_NUM_OF_CONGESTION_GRPS)
-     RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("CG id!"));
-     */
-
-#ifdef FM_NO_OP_OBSERVED_CGS
-    if ((p_FmPort->fmRevInfo.majorRev != 4) &&
-            (p_FmPort->fmRevInfo.majorRev < 6))
-    {
-        if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G) &&
-                (p_FmPort->portType != e_FM_PORT_TYPE_RX))
-        RETURN_ERROR(MAJOR, E_NOT_SUPPORTED, ("Available for Rx ports only"));
-    }
-    else
-#endif /* FM_NO_OP_OBSERVED_CGS */
-    if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_RX)
-            && (p_FmPort->portType != e_FM_PORT_TYPE_OH_OFFLINE_PARSING))
-        RETURN_ERROR(MAJOR, E_NOT_SUPPORTED,
-                     ("Available for Rx & OP ports only"));
-
-    /* Prepare groups map array */
-    memset(grpsMap, 0, FMAN_PORT_CG_MAP_NUM * sizeof(uint32_t));
-    for (i = 0; i < p_CongestionGrps->numOfCongestionGrpsToConsider; i++)
-    {
-        index = (uint8_t)(p_CongestionGrps->congestionGrpsToConsider[i] / 32);
-        mod = (uint8_t)(p_CongestionGrps->congestionGrpsToConsider[i] % 32);
-        if (p_FmPort->fmRevInfo.majorRev != 4)
-            grpsMap[7 - index] |= (uint32_t)(1 << mod);
-        else
-            grpsMap[0] |= (uint32_t)(1 << mod);
-    }
-
-    memset(&priorityTmpArray, 0,
-           FM_PORT_NUM_OF_CONGESTION_GRPS * sizeof(uint8_t));
-
-    for (i = 0; i < p_CongestionGrps->numOfCongestionGrpsToConsider; i++)
-    {
-        for (j = 0; j < FM_MAX_NUM_OF_PFC_PRIORITIES; j++)
-            if (p_CongestionGrps->pfcPrioritiesEn[i][j])
-                priorityTmpArray[p_CongestionGrps->congestionGrpsToConsider[i]] |=
-                        (0x01 << (FM_MAX_NUM_OF_PFC_PRIORITIES - j - 1));
-    }
-
-    for (i = 0; i < FM_PORT_NUM_OF_CONGESTION_GRPS; i++)
-    {
-        err = FmSetCongestionGroupPFCpriority(p_FmPort->h_Fm, i,
-                                              priorityTmpArray[i]);
-        if (err)
-            return err;
-    }
-
-    err = fman_port_add_congestion_grps(&p_FmPort->port, grpsMap);
-    if (err != 0)
-        RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("fman_port_add_congestion_grps"));
-
-    return E_OK;
-}
-
-t_Error FM_PORT_RemoveCongestionGrps(t_Handle h_FmPort,
-                                     t_FmPortCongestionGrps *p_CongestionGrps)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-    uint8_t mod, index;
-    uint32_t i, grpsMap[FMAN_PORT_CG_MAP_NUM];
-    int err;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-
-    {
-#ifdef FM_NO_OP_OBSERVED_CGS
-        t_FmRevisionInfo revInfo;
-
-        FM_GetRevision(p_FmPort->h_Fm, &revInfo);
-        if (revInfo.majorRev != 4)
-        {
-            if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G) &&
-                    (p_FmPort->portType != e_FM_PORT_TYPE_RX))
-            RETURN_ERROR(MAJOR, E_NOT_SUPPORTED, ("Available for Rx ports only"));
-        }
-        else
-#endif /* FM_NO_OP_OBSERVED_CGS */
-        if ((p_FmPort->portType != e_FM_PORT_TYPE_RX_10G)
-                && (p_FmPort->portType != e_FM_PORT_TYPE_RX)
-                && (p_FmPort->portType != e_FM_PORT_TYPE_OH_OFFLINE_PARSING))
-            RETURN_ERROR(MAJOR, E_NOT_SUPPORTED,
-                         ("Available for Rx & OP ports only"));
-    }
-
-    /* Prepare groups map array */
-    memset(grpsMap, 0, FMAN_PORT_CG_MAP_NUM * sizeof(uint32_t));
-    for (i = 0; i < p_CongestionGrps->numOfCongestionGrpsToConsider; i++)
-    {
-        index = (uint8_t)(p_CongestionGrps->congestionGrpsToConsider[i] / 32);
-        mod = (uint8_t)(p_CongestionGrps->congestionGrpsToConsider[i] % 32);
-        if (p_FmPort->fmRevInfo.majorRev != 4)
-            grpsMap[7 - index] |= (uint32_t)(1 << mod);
-        else
-            grpsMap[0] |= (uint32_t)(1 << mod);
-    }
-
-    for (i = 0; i < p_CongestionGrps->numOfCongestionGrpsToConsider; i++)
-    {
-        t_Error err = FmSetCongestionGroupPFCpriority(
-                p_FmPort->h_Fm, p_CongestionGrps->congestionGrpsToConsider[i],
-                0);
-        if (err)
-            return err;
-    }
-
-    err = fman_port_remove_congestion_grps(&p_FmPort->port, grpsMap);
-    if (err != 0)
-        RETURN_ERROR(MAJOR, E_INVALID_VALUE,
-                     ("fman_port_remove_congestion_grps"));
-    return E_OK;
-}
-
-t_Error FM_PORT_GetIPv4OptionsCount(t_Handle h_FmPort,
-                                    uint32_t *p_Ipv4OptionsCount)
-{
-    t_FmPort *p_FmPort = (t_FmPort*)h_FmPort;
-
-    SANITY_CHECK_RETURN_ERROR(p_FmPort, E_INVALID_HANDLE);
-    SANITY_CHECK_RETURN_ERROR(
-            (p_FmPort->portType == e_FM_PORT_TYPE_OH_OFFLINE_PARSING),
-            E_INVALID_VALUE);
-    SANITY_CHECK_RETURN_ERROR(p_FmPort->p_ParamsPage, E_INVALID_STATE);
-    SANITY_CHECK_RETURN_ERROR(p_Ipv4OptionsCount, E_NULL_POINTER);
-
-    *p_Ipv4OptionsCount = GET_UINT32(p_FmPort->p_ParamsPage->ipfOptionsCounter);
-
-    return E_OK;
-}

@@ -29,14 +29,8 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifdef CONFIG_FSL_DPAA_ETH_DEBUG
-#define pr_fmt(fmt) \
-	KBUILD_MODNAME ": %s:%hu:%s() " fmt, \
-	KBUILD_BASENAME".c", __LINE__, __func__
-#else
 #define pr_fmt(fmt) \
 	KBUILD_MODNAME ": " fmt
-#endif
 
 #include <linux/string.h>
 #include <linux/of.h>
@@ -55,6 +49,10 @@ static const char dpa_stats_percpu[][ETH_GSTRING_LEN] = {
 	"tx packets",
 	"tx recycled",
 	"tx confirm",
+#if defined(CONFIG_INET_IPSEC_OFFLOAD) && defined(CONFIG_CPE_FAST_PATH)
+	"tx toenc",
+	"tx todec",
+#endif
 	"tx S/G",
 	"rx S/G",
 	"tx error",
@@ -83,11 +81,63 @@ static char dpa_stats_global[][ETH_GSTRING_LEN] = {
 	/* congestion related stats */
 	"congestion time (ms)",
 	"entered congestion",
-	"congested (0/1)"
+	"congested (0/1)",
+
+	/* The receive pool all private ports share, the same on each: what
+	 * BMan holds of it, beside the per-CPU "bp count" the driver keeps;
+	 * and the episodes its watch found it dry in, and the buffers they
+	 * put back (dpaa_eth_pool.c). */
+	"bp free",
+	"bp dry episodes",
+	"bp buffers reseeded"
 };
 
 #define DPA_STATS_PERCPU_LEN ARRAY_SIZE(dpa_stats_percpu)
 #define DPA_STATS_GLOBAL_LEN ARRAY_SIZE(dpa_stats_global)
+
+#ifdef CONFIG_CPE_FAST_PATH
+/* What a hardware qdisc's leaf classes actually dequeued and dropped.
+ *
+ * These are the only counters that describe accelerated traffic. A leaf class
+ * has a software qdisc too, and tc reports that one, but an offloaded flow
+ * produces no skb and never enqueues there -- so `tc -s class show` reads
+ * approximately zero for precisely the traffic being accelerated, and this is
+ * where the rest of the link is.
+ *
+ * One entry per leaf slot rather than per class in the tree, so the count is a
+ * constant: ethtool fetches the names and the values in separate ioctls, and a
+ * count that moved with `tc class add` would leave userspace lining one up
+ * against the other. A slot no class holds reads zero.
+ *
+ * Then the two queues traffic that names no leaf takes, which a leaf may or
+ * may not hold: [default], where unclassified traffic goes, and [control],
+ * where the frames that keep the link and the gateway itself running go. A
+ * leaf holding one reports the same queue under its own slot too.
+ */
+static const char dpa_stats_ceetm[][ETH_GSTRING_LEN] = {
+	"ceetm dequeued frames",
+	"ceetm dequeued bytes",
+	"ceetm rejected frames",
+};
+
+/* In the order dpa_qdisc_ops.class_stats fills them, after the leaf slots. */
+static const char * const dpa_stats_ceetm_implicit[] = { "default", "control" };
+static_assert(ARRAY_SIZE(dpa_stats_ceetm_implicit) == DPA_CEETM_IMPLICIT_QUEUES,
+	      "one name per queue the qdisc module reports beyond the leaves");
+
+#define DPA_STATS_CEETM_LEN \
+	((DPAA_ETH_CEETM_LEAF_QUEUES + DPA_CEETM_IMPLICIT_QUEUES) * \
+	 ARRAY_SIZE(dpa_stats_ceetm))
+static_assert(ARRAY_SIZE(dpa_stats_ceetm) == DPA_CEETM_CLASS_STATS,
+	      "one name per value the qdisc module reports");
+/* A slot's names carry its index in at most two digits: ethtool_sprintf()
+ * cuts a longer name at ETH_GSTRING_LEN without a word, and two slots' names
+ * would read the same (dpa_get_strings()). */
+static_assert(DPAA_ETH_CEETM_LEAF_QUEUES <= 100,
+	      "a leaf slot numbered from a hundred would not fit its ethtool names");
+#else
+#define DPA_STATS_CEETM_LEN 0
+#endif
 
 static int __cold dpa_get_ksettings(struct net_device *net_dev,
 		struct ethtool_link_ksettings *cmd)
@@ -123,7 +173,7 @@ static int __cold dpa_set_ksettings(struct net_device *net_dev,
 		return -ENODEV;
 	}
 	if (unlikely(priv->mac_dev->phy_dev == NULL)) {
-		netdev_err(net_dev, "phy device not initialized\n");
+		netdev_dbg(net_dev, "phy device not initialized\n");
 		return -ENODEV;
 	}
 
@@ -178,7 +228,7 @@ static int __cold dpa_nway_reset(struct net_device *net_dev)
 		return -ENODEV;
 	}
 	if (unlikely(priv->mac_dev->phy_dev == NULL)) {
-		netdev_err(net_dev, "phy device not initialized\n");
+		netdev_dbg(net_dev, "phy device not initialized\n");
 		return -ENODEV;
 	}
 
@@ -210,7 +260,7 @@ static void __cold dpa_get_pauseparam(struct net_device *net_dev,
 
 	phy_dev = mac_dev->phy_dev;
 	if (unlikely(phy_dev == NULL)) {
-		netdev_err(net_dev, "phy device not initialized\n");
+		netdev_dbg(net_dev, "phy device not initialized\n");
 		return;
 	}
 
@@ -238,7 +288,7 @@ static int __cold dpa_set_pauseparam(struct net_device *net_dev,
 
 	phy_dev = mac_dev->phy_dev;
 	if (unlikely(phy_dev == NULL)) {
-		netdev_err(net_dev, "phy device not initialized\n");
+		netdev_dbg(net_dev, "phy device not initialized\n");
 		return -ENODEV;
 	}
 
@@ -274,13 +324,11 @@ static void dpa_get_wol(struct net_device *net_dev, struct ethtool_wolinfo *wol)
 	wol->supported = 0;
 	wol->wolopts = 0;
 
-	if (!priv->wol || !device_can_wakeup(net_dev->dev.parent))
-		return;
+	if (device_can_wakeup(net_dev->dev.parent))
+		wol->supported |= WAKE_MAGIC;
 
-	if (priv->wol & DPAA_WOL_MAGIC) {
-		wol->supported = WAKE_MAGIC;
-		wol->wolopts = WAKE_MAGIC;
-	}
+	if (priv->wol & DPAA_WOL_MAGIC)
+		wol->wolopts |= WAKE_MAGIC;
 }
 
 static int dpa_set_wol(struct net_device *net_dev, struct ethtool_wolinfo *wol)
@@ -325,7 +373,7 @@ static int dpa_get_eee(struct net_device *net_dev, struct ethtool_keee *et_eee)
 	}
 
 	if (unlikely(priv->mac_dev->phy_dev == NULL)) {
-		netdev_err(net_dev, "phy device not initialized\n");
+		netdev_dbg(net_dev, "phy device not initialized\n");
 		return -ENODEV;
 	}
 
@@ -343,7 +391,7 @@ static int dpa_set_eee(struct net_device *net_dev, struct ethtool_keee *et_eee)
 	}
 
 	if (unlikely(priv->mac_dev->phy_dev == NULL)) {
-		netdev_err(net_dev, "phy device not initialized\n");
+		netdev_dbg(net_dev, "phy device not initialized\n");
 		return -ENODEV;
 	}
 
@@ -355,7 +403,8 @@ static int dpa_get_sset_count(struct net_device *net_dev, int type)
 	unsigned int total_stats, num_stats;
 
 	num_stats   = num_online_cpus() + 1;
-	total_stats = num_stats * DPA_STATS_PERCPU_LEN + DPA_STATS_GLOBAL_LEN;
+	total_stats = num_stats * DPA_STATS_PERCPU_LEN + DPA_STATS_GLOBAL_LEN +
+		      DPA_STATS_CEETM_LEN;
 
 	switch (type) {
 	case ETH_SS_STATS:
@@ -387,6 +436,13 @@ static void copy_stats(struct dpa_percpu_priv_s *percpu_priv, int num_cpus,
 	data[crr_stat * num_stat_values + crr_cpu] = percpu_priv->tx_confirm;
 	data[crr_stat++ * num_stat_values + num_cpus] += percpu_priv->tx_confirm;
 
+#if defined(CONFIG_INET_IPSEC_OFFLOAD) && defined(CONFIG_CPE_FAST_PATH)
+	data[crr_stat * num_stat_values + crr_cpu] = percpu_priv->tx_caam_enc;
+	data[crr_stat++ * num_stat_values + num_cpus] += percpu_priv->tx_caam_enc;
+
+	data[crr_stat * num_stat_values + crr_cpu] = percpu_priv->tx_caam_dec;
+	data[crr_stat++ * num_stat_values + num_cpus] += percpu_priv->tx_caam_dec;
+#endif
 	data[crr_stat * num_stat_values + crr_cpu] = percpu_priv->tx_frag_skbuffs;
 	data[crr_stat++ * num_stat_values + num_cpus] += percpu_priv->tx_frag_skbuffs;
 
@@ -471,6 +527,18 @@ static void dpa_get_ethtool_stats(struct net_device *net_dev,
 	data[offset++] = cg_time;
 	data[offset++] = cg_num;
 	data[offset++] = cg_status;
+
+	data[offset++] = priv->dpa_bp ? bman_query_free_buffers(priv->dpa_bp->pool) : 0;
+	dpa_pool_watch_stats(&data[offset], &data[offset + 1]);
+	offset += 2;
+
+#ifdef CONFIG_CPE_FAST_PATH
+	/* Read rather than accumulated: these are hardware counters, and they
+	 * are read without the clear flag so repeated calls report totals and
+	 * not deltas. A control plane that clears them -- CMD_QM_QUERY_QUEUE
+	 * can -- moves the baseline underneath this. */
+	dpa_qdisc_class_stats(priv->qm_ctx, data + offset);
+#endif
 }
 
 static void dpa_get_strings(struct net_device *net_dev, u32 stringset, u8 *data)
@@ -494,6 +562,22 @@ static void dpa_get_strings(struct net_device *net_dev, u32 stringset, u8 *data)
 		strings += ETH_GSTRING_LEN;
 	}
 	memcpy(strings, dpa_stats_global, size);
+	strings += size;
+
+#ifdef CONFIG_CPE_FAST_PATH
+	/* Leaf i is Tx queue DPAA_ETH_TX_QUEUES + i, which is what
+	 * TC_HTB_LEAF_QUERY_QUEUE answers for a classid. Every name fits
+	 * ETH_GSTRING_LEN, the longest -- "ceetm rejected frames [leaf 63]" and
+	 * "ceetm dequeued frames [default]", thirty-one characters and the NUL
+	 * -- with no room to spare: a slot numbered from a hundred would not. */
+	for (i = 0; i < DPAA_ETH_CEETM_LEAF_QUEUES; i++)
+		for (j = 0; j < ARRAY_SIZE(dpa_stats_ceetm); j++)
+			ethtool_sprintf(&strings, "%s [leaf %u]", dpa_stats_ceetm[j], i);
+	for (i = 0; i < ARRAY_SIZE(dpa_stats_ceetm_implicit); i++)
+		for (j = 0; j < ARRAY_SIZE(dpa_stats_ceetm); j++)
+			ethtool_sprintf(&strings, "%s [%s]", dpa_stats_ceetm[j],
+					dpa_stats_ceetm_implicit[i]);
+#endif
 }
 
 static int dpaa_get_ts_info(struct net_device *net_dev,

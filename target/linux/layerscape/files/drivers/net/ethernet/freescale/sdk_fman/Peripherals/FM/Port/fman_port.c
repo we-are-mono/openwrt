@@ -526,6 +526,9 @@ static void get_oh_stats_reg(struct fman_port *port,
     case E_FMAN_PORT_STATS_CNT_DEALLOC_BUF:
         *stats_reg = &regs->fmbm_obdc;
         break;
+    case E_FMAN_PORT_STATS_CNT_RX_OUT_OF_BUF:
+        *stats_reg = &regs->fmbm_oodc;
+        break;
     case E_FMAN_PORT_STATS_CNT_FILTERED_FRAME:
         *stats_reg = &regs->fmbm_offc;
         break;
@@ -717,27 +720,6 @@ void fman_port_defconfig(struct fman_port_cfg *cfg, enum fman_port_type type)
     cfg->no_scatter_gather = DEFAULT_FMAN_SP_NO_SCATTER_GATHER;
 }
 
-static uint8_t fman_port_find_bpool(struct fman_port *port, uint8_t bpid)
-{
-    uint32_t *bp_reg, tmp;
-    uint8_t i, id;
-
-    /* Find the pool */
-    bp_reg = port->bmi_regs->rx.fmbm_ebmpi;
-    for (i = 0;
-         (i < port->ext_pools_num && (i < FMAN_PORT_MAX_EXT_POOLS_NUM));
-         i++) {
-        tmp = ioread32be(&bp_reg[i]);
-        id = (uint8_t)((tmp & BMI_EXT_BUF_POOL_ID_MASK) >>
-                BMI_EXT_BUF_POOL_ID_SHIFT);
-
-        if (id == bpid)
-            break;
-    }
-
-    return i;
-}
-
 int fman_port_init(struct fman_port *port,
         struct fman_port_cfg *cfg,
         struct fman_port_params *params)
@@ -883,6 +865,48 @@ int fman_port_disable(const struct fman_port *port)
     return 0;
 }
 
+/* Whether the port has finished stopping, read from the registers rather than
+ * from what software last asked for: its BMI is disabled and reports no
+ * graceful stop still under way, and for a port QMI dequeues for, QMI is
+ * disabled and handles no frame descriptor. fman_port_disable() waits a
+ * bounded time for the same bits and then gives up, so a port it reported
+ * stopped may still be finishing a frame; this is the question to ask again. */
+bool fman_port_is_stopped(const struct fman_port *port)
+{
+    uint32_t *bmi_cfg_reg, *bmi_status_reg;
+    bool rx_port;
+
+    switch (port->type) {
+    case E_FMAN_PORT_TYPE_RX:
+    case E_FMAN_PORT_TYPE_RX_10G:
+        bmi_cfg_reg = &port->bmi_regs->rx.fmbm_rcfg;
+        bmi_status_reg = &port->bmi_regs->rx.fmbm_rst;
+        rx_port = TRUE;
+        break;
+    case E_FMAN_PORT_TYPE_TX:
+    case E_FMAN_PORT_TYPE_TX_10G:
+        bmi_cfg_reg = &port->bmi_regs->tx.fmbm_tcfg;
+        bmi_status_reg = &port->bmi_regs->tx.fmbm_tst;
+        rx_port = FALSE;
+        break;
+    case E_FMAN_PORT_TYPE_OP:
+    case E_FMAN_PORT_TYPE_HC:
+        bmi_cfg_reg = &port->bmi_regs->oh.fmbm_ocfg;
+        bmi_status_reg = &port->bmi_regs->oh.fmbm_ost;
+        rx_port = FALSE;
+        break;
+    default:
+        return FALSE;
+    }
+
+    if (!rx_port &&
+        ((ioread32be(&port->qmi_regs->fmqm_pnc) & QMI_PORT_CFG_EN) ||
+         (ioread32be(&port->qmi_regs->fmqm_pns) & QMI_PORT_STATUS_DEQ_FD_BSY)))
+        return FALSE;
+    return !(ioread32be(bmi_cfg_reg) & BMI_PORT_CFG_EN) &&
+           !(ioread32be(bmi_status_reg) & BMI_PORT_STATUS_BSY);
+}
+
 int fman_port_set_bpools(const struct fman_port *port,
         const struct fman_port_bpools *bp)
 {
@@ -963,123 +987,6 @@ int fman_port_set_bpools(const struct fman_port *port,
             BMI_POOL_DEP_NUM_OF_POOLS_SHIFT;
 
     iowrite32be(tmp, bp_depl_reg);
-    return 0;
-}
-
-int fman_port_set_rate_limiter(struct fman_port *port,
-        struct fman_port_rate_limiter *rate_limiter)
-{
-    uint32_t *rate_limit_reg, *rate_limit_scale_reg;
-    uint32_t granularity, tmp;
-    uint8_t usec_bit, factor;
-
-    switch (port->type) {
-    case E_FMAN_PORT_TYPE_TX:
-    case E_FMAN_PORT_TYPE_TX_10G:
-        rate_limit_reg = &port->bmi_regs->tx.fmbm_trlmt;
-        rate_limit_scale_reg = &port->bmi_regs->tx.fmbm_trlmts;
-        granularity = BMI_RATE_LIMIT_GRAN_TX;
-        break;
-    case E_FMAN_PORT_TYPE_OP:
-        rate_limit_reg = &port->bmi_regs->oh.fmbm_orlmt;
-        rate_limit_scale_reg = &port->bmi_regs->oh.fmbm_orlmts;
-        granularity = BMI_RATE_LIMIT_GRAN_OP;
-        break;
-    default:
-        return -EINVAL;
-    }
-
-    /* Factor is per 1 usec count */
-    factor = 1;
-    usec_bit = rate_limiter->count_1micro_bit;
-
-    /* If rate limit is too small for an 1usec factor, adjust timestamp
-     * scale and multiply the factor */
-    while (rate_limiter->rate < (granularity / factor)) {
-        if (usec_bit == 31)
-            /* Can't configure rate limiter - rate is too small */
-            return -EINVAL;
-
-        usec_bit++;
-        factor <<= 1;
-    }
-
-    /* Figure out register value. The "while" above quarantees that
-     * (rate_limiter->rate * factor / granularity) >= 1 */
-    tmp = (uint32_t)(rate_limiter->rate * factor / granularity - 1);
-
-    /* Check rate limit isn't too large */
-    if (tmp >= BMI_RATE_LIMIT_MAX_RATE_IN_GRAN_UNITS)
-        return -EINVAL;
-
-    /* Check burst size is in allowed range */
-    if ((rate_limiter->burst_size == 0) ||
-            (rate_limiter->burst_size >
-                BMI_RATE_LIMIT_MAX_BURST_SIZE))
-        return -EINVAL;
-
-    tmp |= (uint32_t)(rate_limiter->burst_size - 1) <<
-            BMI_RATE_LIMIT_MAX_BURST_SHIFT;
-
-    if ((port->type == E_FMAN_PORT_TYPE_OP) &&
-            (port->fm_rev_maj == 4)) {
-        if (rate_limiter->high_burst_size_gran)
-            tmp |= BMI_RATE_LIMIT_HIGH_BURST_SIZE_GRAN;
-    }
-
-    iowrite32be(tmp, rate_limit_reg);
-
-    /* Set up rate limiter scale register */
-    tmp = BMI_RATE_LIMIT_SCALE_EN;
-    tmp |= (31 - (uint32_t)usec_bit) << BMI_RATE_LIMIT_SCALE_TSBS_SHIFT;
-
-    if ((port->type == E_FMAN_PORT_TYPE_OP) &&
-            (port->fm_rev_maj == 4))
-        tmp |= rate_limiter->rate_factor;
-
-    iowrite32be(tmp, rate_limit_scale_reg);
-
-    return 0;
-}
-
-int fman_port_delete_rate_limiter(struct fman_port *port)
-{
-    uint32_t *rate_limit_scale_reg;
-
-    switch (port->type) {
-    case E_FMAN_PORT_TYPE_TX:
-    case E_FMAN_PORT_TYPE_TX_10G:
-        rate_limit_scale_reg = &port->bmi_regs->tx.fmbm_trlmts;
-        break;
-    case E_FMAN_PORT_TYPE_OP:
-        rate_limit_scale_reg = &port->bmi_regs->oh.fmbm_orlmts;
-        break;
-    default:
-        return -EINVAL;
-    }
-
-    iowrite32be(0, rate_limit_scale_reg);
-    return 0;
-}
-
-int fman_port_set_err_mask(struct fman_port *port, uint32_t err_mask)
-{
-    uint32_t *err_mask_reg;
-
-    /* Obtain register address */
-    switch (port->type) {
-    case E_FMAN_PORT_TYPE_RX:
-    case E_FMAN_PORT_TYPE_RX_10G:
-        err_mask_reg = &port->bmi_regs->rx.fmbm_rfsem;
-        break;
-    case E_FMAN_PORT_TYPE_OP:
-        err_mask_reg = &port->bmi_regs->oh.fmbm_ofsem;
-        break;
-    default:
-        return -EINVAL;
-    }
-
-    iowrite32be(err_mask, err_mask_reg);
     return 0;
 }
 
@@ -1193,117 +1100,6 @@ int fman_port_set_perf_cnt_params(struct fman_port *port,
     return 0;
 }
 
-int fman_port_set_stats_cnt_mode(struct fman_port *port, bool enable)
-{
-    uint32_t *stats_reg, tmp;
-
-    switch (port->type) {
-    case E_FMAN_PORT_TYPE_RX:
-    case E_FMAN_PORT_TYPE_RX_10G:
-        stats_reg = &port->bmi_regs->rx.fmbm_rstc;
-        break;
-    case E_FMAN_PORT_TYPE_TX:
-    case E_FMAN_PORT_TYPE_TX_10G:
-        stats_reg = &port->bmi_regs->tx.fmbm_tstc;
-        break;
-    case E_FMAN_PORT_TYPE_OP:
-    case E_FMAN_PORT_TYPE_HC:
-        stats_reg = &port->bmi_regs->oh.fmbm_ostc;
-        break;
-    default:
-        return -EINVAL;
-    }
-
-    tmp = ioread32be(stats_reg);
-
-    if (enable)
-        tmp |= BMI_COUNTERS_EN;
-    else
-        tmp &= ~BMI_COUNTERS_EN;
-
-    iowrite32be(tmp, stats_reg);
-    return 0;
-}
-
-int fman_port_set_perf_cnt_mode(struct fman_port *port, bool enable)
-{
-    uint32_t *stats_reg, tmp;
-
-    switch (port->type) {
-    case E_FMAN_PORT_TYPE_RX:
-    case E_FMAN_PORT_TYPE_RX_10G:
-        stats_reg = &port->bmi_regs->rx.fmbm_rpc;
-        break;
-    case E_FMAN_PORT_TYPE_TX:
-    case E_FMAN_PORT_TYPE_TX_10G:
-        stats_reg = &port->bmi_regs->tx.fmbm_tpc;
-        break;
-    case E_FMAN_PORT_TYPE_OP:
-    case E_FMAN_PORT_TYPE_HC:
-        stats_reg = &port->bmi_regs->oh.fmbm_opc;
-        break;
-    default:
-        return -EINVAL;
-    }
-
-    tmp = ioread32be(stats_reg);
-
-    if (enable)
-        tmp |= BMI_COUNTERS_EN;
-    else
-        tmp &= ~BMI_COUNTERS_EN;
-
-    iowrite32be(tmp, stats_reg);
-    return 0;
-}
-
-int fman_port_set_queue_cnt_mode(struct fman_port *port, bool enable)
-{
-    uint32_t tmp;
-
-    tmp = ioread32be(&port->qmi_regs->fmqm_pnc);
-
-    if (enable)
-        tmp |= QMI_PORT_CFG_EN_COUNTERS;
-    else
-        tmp &= ~QMI_PORT_CFG_EN_COUNTERS;
-
-    iowrite32be(tmp, &port->qmi_regs->fmqm_pnc);
-    return 0;
-}
-
-int fman_port_set_bpool_cnt_mode(struct fman_port *port,
-        uint8_t bpid,
-        bool enable)
-{
-    uint8_t index;
-    uint32_t tmp;
-
-    switch (port->type) {
-    case E_FMAN_PORT_TYPE_RX:
-    case E_FMAN_PORT_TYPE_RX_10G:
-        break;
-    default:
-        return -EINVAL;
-    }
-
-    /* Find the pool */
-    index = fman_port_find_bpool(port, bpid);
-    if (index == port->ext_pools_num || index == FMAN_PORT_MAX_EXT_POOLS_NUM)
-        /* Not found */
-        return -EINVAL;
-
-    tmp = ioread32be(&port->bmi_regs->rx.fmbm_ebmpi[index]);
-
-    if (enable)
-        tmp |= BMI_EXT_BUF_POOL_EN_COUNTER;
-    else
-        tmp &= ~BMI_EXT_BUF_POOL_EN_COUNTER;
-
-    iowrite32be(tmp, &port->bmi_regs->rx.fmbm_ebmpi[index]);
-    return 0;
-}
-
 uint32_t fman_port_get_stats_counter(struct fman_port *port,
         enum fman_port_stats_counters  counter)
 {
@@ -1331,35 +1127,6 @@ uint32_t fman_port_get_stats_counter(struct fman_port *port,
 
     ret_val = ioread32be(stats_reg);
     return ret_val;
-}
-
-void fman_port_set_stats_counter(struct fman_port *port,
-        enum fman_port_stats_counters counter,
-        uint32_t value)
-{
-    uint32_t *stats_reg;
-
-    switch (port->type) {
-    case E_FMAN_PORT_TYPE_RX:
-    case E_FMAN_PORT_TYPE_RX_10G:
-        get_rx_stats_reg(port, counter, &stats_reg);
-        break;
-    case E_FMAN_PORT_TYPE_TX:
-    case E_FMAN_PORT_TYPE_TX_10G:
-        get_tx_stats_reg(port, counter, &stats_reg);
-        break;
-    case E_FMAN_PORT_TYPE_OP:
-    case E_FMAN_PORT_TYPE_HC:
-        get_oh_stats_reg(port, counter, &stats_reg);
-        break;
-    default:
-        stats_reg = NULL;
-    }
-
-    if (stats_reg == NULL)
-        return;
-
-    iowrite32be(value, stats_reg);
 }
 
 uint32_t fman_port_get_perf_counter(struct fman_port *port,
@@ -1391,35 +1158,6 @@ uint32_t fman_port_get_perf_counter(struct fman_port *port,
     return ret_val;
 }
 
-void fman_port_set_perf_counter(struct fman_port *port,
-        enum fman_port_perf_counters counter,
-        uint32_t value)
-{
-    uint32_t *perf_reg;
-
-    switch (port->type) {
-    case E_FMAN_PORT_TYPE_RX:
-    case E_FMAN_PORT_TYPE_RX_10G:
-        get_rx_perf_reg(port, counter, &perf_reg);
-        break;
-    case E_FMAN_PORT_TYPE_TX:
-    case E_FMAN_PORT_TYPE_TX_10G:
-        get_tx_perf_reg(port, counter, &perf_reg);
-        break;
-    case E_FMAN_PORT_TYPE_OP:
-    case E_FMAN_PORT_TYPE_HC:
-        get_oh_perf_reg(port, counter, &perf_reg);
-        break;
-    default:
-        perf_reg = NULL;
-    }
-
-    if (perf_reg == NULL)
-        return;
-
-    iowrite32be(value, perf_reg);
-}
-
 uint32_t fman_port_get_qmi_counter(struct fman_port *port,
         enum fman_port_qmi_counters  counter)
 {
@@ -1434,135 +1172,3 @@ uint32_t fman_port_get_qmi_counter(struct fman_port *port,
     return ret_val;
 }
 
-void fman_port_set_qmi_counter(struct fman_port *port,
-        enum fman_port_qmi_counters counter,
-        uint32_t value)
-{
-    uint32_t *queue_reg;
-
-    get_qmi_counter_reg(port, counter, &queue_reg);
-
-    if (queue_reg == NULL)
-        return;
-
-    iowrite32be(value, queue_reg);
-}
-
-uint32_t fman_port_get_bpool_counter(struct fman_port *port, uint8_t bpid)
-{
-    uint8_t index;
-    uint32_t ret_val;
-
-    switch (port->type) {
-    case E_FMAN_PORT_TYPE_RX:
-    case E_FMAN_PORT_TYPE_RX_10G:
-        break;
-    default:
-        return 0;
-    }
-
-    /* Find the pool */
-    index = fman_port_find_bpool(port, bpid);
-    if (index == port->ext_pools_num || index == FMAN_PORT_MAX_EXT_POOLS_NUM)
-        /* Not found */
-        return 0;
-
-    ret_val = ioread32be(&port->bmi_regs->rx.fmbm_acnt[index]);
-    return ret_val;
-}
-
-void fman_port_set_bpool_counter(struct fman_port *port,
-        uint8_t bpid,
-        uint32_t value)
-{
-    uint8_t index;
-
-    switch (port->type) {
-    case E_FMAN_PORT_TYPE_RX:
-    case E_FMAN_PORT_TYPE_RX_10G:
-        break;
-    default:
-        return;
-    }
-
-    /* Find the pool */
-    index = fman_port_find_bpool(port, bpid);
-    if (index == port->ext_pools_num || index == FMAN_PORT_MAX_EXT_POOLS_NUM)
-        /* Not found */
-        return;
-
-    iowrite32be(value, &port->bmi_regs->rx.fmbm_acnt[index]);
-}
-
-int fman_port_add_congestion_grps(struct fman_port *port,
-        uint32_t grps_map[FMAN_PORT_CG_MAP_NUM])
-{
-    int i;
-    uint32_t tmp, *grp_map_reg;
-    uint8_t max_grp_map_num;
-
-    switch (port->type) {
-    case E_FMAN_PORT_TYPE_RX:
-    case E_FMAN_PORT_TYPE_RX_10G:
-        if (port->fm_rev_maj == 4)
-            max_grp_map_num = 1;
-        else
-            max_grp_map_num = FMAN_PORT_CG_MAP_NUM;
-        grp_map_reg = port->bmi_regs->rx.fmbm_rcgm;
-        break;
-    case E_FMAN_PORT_TYPE_OP:
-        max_grp_map_num = 1;
-        if (port->fm_rev_maj != 4)
-            return -EINVAL;
-        grp_map_reg = port->bmi_regs->oh.fmbm_ocgm;
-        break;
-    default:
-        return -EINVAL;
-    }
-
-    for (i = (max_grp_map_num - 1); i >= 0; i--) {
-        if (grps_map[i] == 0)
-            continue;
-        tmp = ioread32be(&grp_map_reg[i]);
-        tmp |= grps_map[i];
-        iowrite32be(tmp, &grp_map_reg[i]);
-    }
-
-    return 0;
-}
-
-int fman_port_remove_congestion_grps(struct fman_port *port,
-        uint32_t grps_map[FMAN_PORT_CG_MAP_NUM])
-{
-    int i;
-    uint32_t tmp, *grp_map_reg;
-    uint8_t max_grp_map_num;
-
-    switch (port->type) {
-    case E_FMAN_PORT_TYPE_RX:
-    case E_FMAN_PORT_TYPE_RX_10G:
-        if (port->fm_rev_maj == 4)
-            max_grp_map_num = 1;
-        else
-            max_grp_map_num = FMAN_PORT_CG_MAP_NUM;
-        grp_map_reg = port->bmi_regs->rx.fmbm_rcgm;
-        break;
-    case E_FMAN_PORT_TYPE_OP:
-        max_grp_map_num = 1;
-        if (port->fm_rev_maj != 4)
-            return -EINVAL;
-        grp_map_reg = port->bmi_regs->oh.fmbm_ocgm;
-        break;
-    default:
-        return -EINVAL;
-    }
-
-    for (i = (max_grp_map_num - 1); i >= 0; i--) {
-        if (grps_map[i] == 0)
-            continue;
-        tmp = ioread32be(&grp_map_reg[i]);
-        tmp &= ~grps_map[i];
-        iowrite32be(tmp, &grp_map_reg[i]);
-    }
-    return 0;
-}

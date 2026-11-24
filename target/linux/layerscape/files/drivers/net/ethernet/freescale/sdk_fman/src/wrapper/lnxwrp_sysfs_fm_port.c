@@ -230,7 +230,7 @@ static struct attribute *fm_oh_port_dev_stats_attributes[] = {
 	/* &dev_attr_port_rx_bad_frame.attr, */
 	/* &dev_attr_port_rx_large_frame.attr, */
 	&dev_attr_port_rx_out_of_buffers_discard.attr,
-	/*&dev_attr_port_rx_filter_frame.attr, */
+	&dev_attr_port_rx_filter_frame.attr, 
 	NULL
 };
 
@@ -244,40 +244,29 @@ static ssize_t show_fm_port_regs(struct device *dev,
 {
 	unsigned long flags;
 	unsigned n = 0;
-#if (defined(DEBUG_ERRORS) && (DEBUG_ERRORS > 0))
 	t_LnxWrpFmPortDev *p_LnxWrpFmPortDev;
-#endif
 	if (attr == NULL || buf == NULL || dev == NULL)
 		return -EINVAL;
 
-#if (defined(DEBUG_ERRORS) && (DEBUG_ERRORS > 0))
 	p_LnxWrpFmPortDev =
 		(t_LnxWrpFmPortDev *) dev_get_drvdata(dev);
 
 
-	local_irq_save(flags);
-
 	if (!p_LnxWrpFmPortDev->h_Dev) {
 		n = snprintf(buf, PAGE_SIZE, "\tFM Port not configured...\n");
 		return n;
-	} else {
-		n = snprintf(buf, PAGE_SIZE,
-				"FM port driver registers dump.\n");
-		n = fm_port_dump_regs(p_LnxWrpFmPortDev->h_Dev, buf, n);
 	}
 
-	local_irq_restore(flags);
-
-	return n;
-#else
+	n = snprintf(buf, PAGE_SIZE,
+			"FM port driver registers dump.\n");
 
 	local_irq_save(flags);
-	n = snprintf(buf, PAGE_SIZE,
-			"Debug level is too low to dump registers!!!\n");
+
+	n = fm_port_dump_regs(p_LnxWrpFmPortDev->h_Dev, buf, n);
+
 	local_irq_restore(flags);
 
 	return n;
-#endif
 }
 
 static ssize_t show_fm_port_ipv4_options(struct device *dev,
@@ -285,45 +274,35 @@ static ssize_t show_fm_port_ipv4_options(struct device *dev,
 {
 	unsigned long flags;
 	unsigned n = 0;
-#if (defined(DEBUG_ERRORS) && (DEBUG_ERRORS > 0))
 	t_LnxWrpFmPortDev *p_LnxWrpFmPortDev;
-#endif
 
 	if (attr == NULL || buf == NULL || dev == NULL)
 		return -EINVAL;
 
-#if (defined(DEBUG_ERRORS) && (DEBUG_ERRORS > 0))
 	p_LnxWrpFmPortDev =
 		(t_LnxWrpFmPortDev *) dev_get_drvdata(dev);
-
-	local_irq_save(flags);
 
 	if (!p_LnxWrpFmPortDev->h_Dev) {
 		n = snprintf(buf, PAGE_SIZE, "\tFM Port not configured...\n");
 		return n;
-	} else if (((t_FmPort *)p_LnxWrpFmPortDev->h_Dev)->p_ParamsPage
-					== NULL) {
+	}
+
+	if (((t_FmPort *)p_LnxWrpFmPortDev->h_Dev)->p_ParamsPage == NULL) {
 		n = snprintf(buf, PAGE_SIZE,
 			"\tPort: FMan-controller params page not set\n");
 		return n;
-	} else {
-		n = snprintf(buf, PAGE_SIZE,
-			"Counter for fragmented pkt with IP header options\n");
-		n = fm_port_dump_ipv4_opt(p_LnxWrpFmPortDev->h_Dev, buf, n);
 	}
 
-	local_irq_restore(flags);
-
-	return n;
-#else
+	n = snprintf(buf, PAGE_SIZE,
+		"Counter for fragmented pkt with IP header options\n");
 
 	local_irq_save(flags);
-	n = snprintf(buf, PAGE_SIZE,
-			"Debug level is too low to dump registers!!!\n");
+
+	n = fm_port_dump_ipv4_opt(p_LnxWrpFmPortDev->h_Dev, buf, n);
+
 	local_irq_restore(flags);
 
 	return n;
-#endif
 }
 
 static ssize_t show_fm_port_bmi_regs(struct device *dev,
@@ -331,40 +310,29 @@ static ssize_t show_fm_port_bmi_regs(struct device *dev,
 {
 	unsigned long flags;
 	unsigned n = 0;
-#if (defined(DEBUG_ERRORS) && (DEBUG_ERRORS > 0))
 	t_LnxWrpFmPortDev *p_LnxWrpFmPortDev;
-#endif
 
 	if (attr == NULL || buf == NULL || dev == NULL)
 		return -EINVAL;
 
-#if (defined(DEBUG_ERRORS) && (DEBUG_ERRORS > 0))
 	p_LnxWrpFmPortDev =
 		(t_LnxWrpFmPortDev *) dev_get_drvdata(dev);
-
-	local_irq_save(flags);
 
 	if (!p_LnxWrpFmPortDev->h_Dev) {
 		n = snprintf(buf, PAGE_SIZE, "\tFM Port not configured...\n");
 		return n;
-	} else {
-		n = snprintf(buf, PAGE_SIZE,
-				"FM port driver registers dump.\n");
-		n = fm_port_dump_regs_bmi(p_LnxWrpFmPortDev->h_Dev, buf, n);
 	}
 
-	local_irq_restore(flags);
-
-	return n;
-#else
+	n = snprintf(buf, PAGE_SIZE,
+			"FM port driver registers dump.\n");
 
 	local_irq_save(flags);
-	n = snprintf(buf, PAGE_SIZE,
-			"Debug level is too low to dump registers!!!\n");
+
+	n = fm_port_dump_regs_bmi(p_LnxWrpFmPortDev->h_Dev, buf, n);
+
 	local_irq_restore(flags);
 
 	return n;
-#endif
 }
 
 static ssize_t show_fm_port_qmi_regs(struct device *dev,
@@ -372,40 +340,29 @@ static ssize_t show_fm_port_qmi_regs(struct device *dev,
 {
 	unsigned long flags;
 	unsigned n = 0;
-#if (defined(DEBUG_ERRORS) && (DEBUG_ERRORS > 0))
 	t_LnxWrpFmPortDev *p_LnxWrpFmPortDev;
-#endif
 
 	if (attr == NULL || buf == NULL || dev == NULL)
 		return -EINVAL;
 
-#if (defined(DEBUG_ERRORS) && (DEBUG_ERRORS > 0))
 	p_LnxWrpFmPortDev =
 		(t_LnxWrpFmPortDev *) dev_get_drvdata(dev);
-
-	local_irq_save(flags);
 
 	if (!p_LnxWrpFmPortDev->h_Dev) {
 		n = snprintf(buf, PAGE_SIZE, "\tFM Port not configured...\n");
 		return n;
-	} else {
-		n = snprintf(buf, PAGE_SIZE,
-				"FM port driver registers dump.\n");
-		n = fm_port_dump_regs_qmi(p_LnxWrpFmPortDev->h_Dev, buf, n);
 	}
 
-	local_irq_restore(flags);
-
-	return n;
-#else
+	n = snprintf(buf, PAGE_SIZE,
+			"FM port driver registers dump.\n");
 
 	local_irq_save(flags);
-	n = snprintf(buf, PAGE_SIZE,
-			"Debug level is too low to dump registers!!!\n");
+
+	n = fm_port_dump_regs_qmi(p_LnxWrpFmPortDev->h_Dev, buf, n);
+
 	local_irq_restore(flags);
 
 	return n;
-#endif
 }
 
 static DEVICE_ATTR(fm_port_regs, S_IRUGO | S_IRUSR, show_fm_port_regs, NULL);
@@ -645,19 +602,6 @@ int fm_port_dump_regs_bmi(void *h_dev, char *buf, int nn)
 		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_orlmt);
 		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_ocmne);
 		{
-#ifndef FM_NO_OP_OBSERVED_POOLS
-		if (p_FmPort->fmRevInfo.majorRev == 4) {
-			FM_DMP_TITLE(buf, n,
-				&p_bmi->ohPortBmiRegs.fmbm_oebmpi,
-				"fmbm_oebmpi");
-
-			for (i = 0; i < FM_PORT_MAX_NUM_OF_OBSERVED_EXT_POOLS; ++i) {
-				FM_DMP_MEM_32(buf, n,
-					&(p_bmi->ohPortBmiRegs.fmbm_oebmpi[i]));
-			}
-			FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_ocgm);
-		}
-#endif /* !FM_NO_OP_OBSERVED_POOLS */
 		}
 		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_ostc);
 		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_ofrc);
@@ -667,6 +611,9 @@ int fm_port_dump_regs_bmi(void *h_dev, char *buf, int nn)
 		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_offc);
 		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_ofwdc);
 		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_ofldec);
+		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_obdc);
+		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_oodc);
+		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_opec);
 		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_opc);
 		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_opcp);
 		FM_DMP_V32(buf, n, &p_bmi->ohPortBmiRegs, fmbm_occn);
@@ -698,6 +645,7 @@ int fm_port_dump_regs_bmi(void *h_dev, char *buf, int nn)
 		FM_DMP_V32(buf, n, &p_bmi->rxPortBmiRegs, fmbm_rfpne);
 		FM_DMP_V32(buf, n, &p_bmi->rxPortBmiRegs, fmbm_rpso);
 		FM_DMP_V32(buf, n, &p_bmi->rxPortBmiRegs, fmbm_rpp);
+		FM_DMP_V32(buf, n, &p_bmi->rxPortBmiRegs, fmbm_rccb); 
 		FM_DMP_TITLE(buf, n, &(p_bmi->rxPortBmiRegs.fmbm_rprai),
 			"fmbm_rprai");
 		for (i = 0; i < FM_PORT_PRS_RESULT_NUM_OF_WORDS; ++i) {

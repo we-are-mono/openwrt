@@ -170,8 +170,13 @@ static void SetupSgmiiInternalPhyBaseX(t_Memac *p_Memac, uint8_t phyAddr)
     MEMAC_MII_WritePhyReg(p_Memac, phyAddr, 0x13, 0x002f);
     MEMAC_MII_WritePhyReg(p_Memac, phyAddr, 0x12, 0xaf08);
 
-    /* Restart AN */
-    tmpReg16 = PHY_SGMII_CR_DEF_VAL | PHY_SGMII_CR_RESET_AN;
+    if (!p_Memac->fixed)
+        /* Restart AN */
+        tmpReg16 = PHY_SGMII_CR_DEF_VAL | PHY_SGMII_CR_RESET_AN;
+    else
+        /* A fixed link negotiates nothing, as in the SGMII setup above:
+           AN off, which is also how the PCS comes out of reset */
+        tmpReg16 = PHY_SGMII_CR_DEF_VAL & ~PHY_SGMII_CR_AN_EN;
     MEMAC_MII_WritePhyReg(p_Memac, phyAddr, 0x0, tmpReg16);
 
     /* Restore original enet mode */
@@ -186,10 +191,8 @@ static t_Error CheckInitParameters(t_Memac *p_Memac)
 
     portType = ((ENET_SPEED_FROM_MODE(p_Memac->enetMode) < e_ENET_SPEED_10000) ? e_FM_MAC_1G : e_FM_MAC_10G);
 
-#if (FM_MAX_NUM_OF_10G_MACS > 0)
     if ((portType == e_FM_MAC_10G) && (p_Memac->macId >= FM_MAX_NUM_OF_10G_MACS))
         RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("10G MAC ID must be less than %d", FM_MAX_NUM_OF_10G_MACS));
-#endif /* (FM_MAX_NUM_OF_10G_MACS > 0) */
 
     if ((portType == e_FM_MAC_1G) && (p_Memac->macId >= FM_MAX_NUM_OF_1G_MACS))
         RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("1G MAC ID must be less than %d", FM_MAX_NUM_OF_1G_MACS));
@@ -199,10 +202,8 @@ static t_Error CheckInitParameters(t_Memac *p_Memac)
         RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("Uninitialized f_Exception"));
     if (!p_Memac->f_Event)
         RETURN_ERROR(MAJOR, E_INVALID_VALUE, ("Uninitialized f_Event"));
-#ifdef FM_LEN_CHECK_ERRATA_FMAN_SW002
     if (!p_Memac->p_MemacDriverParam->no_length_check_enable)
        RETURN_ERROR(MINOR, E_NOT_SUPPORTED, ("LengthCheck!"));
-#endif /* FM_LEN_CHECK_ERRATA_FMAN_SW002 */
 
     return E_OK;
 }
@@ -798,6 +799,8 @@ static t_Error MemacAddHashMacAddress(t_Handle h_Memac, t_EnetAddr *p_EthAddr)
 
     /* Create element to be added to the driver hash table */
     p_HashEntry = (t_EthHashEntry *)XX_Malloc(sizeof(t_EthHashEntry));
+    if (!p_HashEntry)
+        RETURN_ERROR(MAJOR, E_NO_MEMORY, ("hash entry"));
     p_HashEntry->addr = ethAddr;
     INIT_LIST(&p_HashEntry->node);
 
@@ -877,6 +880,34 @@ static uint16_t MemacGetMaxFrameLength(t_Handle h_Memac)
     SANITY_CHECK_RETURN_VALUE(!p_Memac->p_MemacDriverParam, E_INVALID_STATE, 0);
 
     return fman_memac_get_max_frame_len(p_Memac->p_MemMap);
+}
+
+/* ......................................................................... */
+
+static t_Error MemacSetMaxFrameLength(t_Handle h_Memac, uint16_t newVal)
+{
+    t_Memac     *p_Memac = (t_Memac *)h_Memac;
+    e_FmMacType portType;
+    t_Error     err;
+
+    SANITY_CHECK_RETURN_ERROR(p_Memac, E_INVALID_HANDLE);
+    SANITY_CHECK_RETURN_ERROR(!p_Memac->p_MemacDriverParam, E_INVALID_STATE);
+
+    portType =
+        ((ENET_SPEED_FROM_MODE(p_Memac->enetMode) < e_ENET_SPEED_10000) ? e_FM_MAC_1G : e_FM_MAC_10G);
+
+    /* The FM checks the length against the port's max frame length and
+     * records it; only once accepted does the MAC see it. */
+    err = FmSetMacMaxFrame(p_Memac->fmMacControllerDriver.h_Fm,
+                           portType,
+                           p_Memac->fmMacControllerDriver.macId,
+                           newVal);
+    if (err)
+        RETURN_ERROR(MINOR, err, NO_MSG);
+
+    fman_memac_set_max_frame_len(p_Memac->p_MemMap, newVal);
+
+    return E_OK;
 }
 
 static t_Error MemacInitInternalPhy(t_Handle h_Memac)
@@ -964,7 +995,6 @@ static t_Error MemacInit(t_Handle h_Memac)
                slow_10g_if,
                p_Memac->exceptions);
 
-#ifdef FM_RX_FIFO_CORRUPT_ERRATA_10GMAC_A006320
     {
     	uint32_t tmpReg = 0;
 
@@ -982,7 +1012,6 @@ static t_Error MemacInit(t_Handle h_Memac)
 			/* DBG(WARNING, ("mEMAC strips CRC from received frames as part of A006320 errata workaround"));*/
         }
     }
-#endif /* FM_RX_FIFO_CORRUPT_ERRATA_10GMAC_A006320 */
 
     MemacInitInternalPhy(h_Memac);
 
@@ -1053,6 +1082,63 @@ static t_Error MemacFree(t_Handle h_Memac)
 
 /* ......................................................................... */
 
+static t_Error MemacSetAllMulti(t_Handle h_Memac, bool newVal)
+{
+    t_Memac             *p_Memac = (t_Memac *)h_Memac;
+    uint32_t            ii;
+    char                *pChar;
+    char                EthAddr[6];
+
+    SANITY_CHECK_RETURN_ERROR(p_Memac, E_NULL_POINTER);
+    SANITY_CHECK_RETURN_ERROR(!p_Memac->p_MemacDriverParam, E_INVALID_STATE);
+
+    /* For IPv4 Multicast packet first 3 bytes of dst mac remains the same.
+       so generating hash by varying remaining 3 bytes,which maps to 3 bits
+       in hash register.
+       Similarly for IPv6 multicast packet, first 2 bytes of multicast packet
+       remains the same, so generating hash by varying remaining 4 bytes,
+       which maps to 4 bits in hash register*/
+
+    pChar = EthAddr;
+    pChar[0] = 0x01;
+    pChar[1] = 0x00;
+    pChar[2] = 0x5e;
+    for(ii=0;ii<=7;ii++)
+    {
+        pChar[3] = ii>>2 & 1;
+        pChar[4] = ii>>1 & 1;
+        pChar[5] = ii>>0 & 1;
+        if(newVal)
+        {
+            MemacAddHashMacAddress(h_Memac, (t_EnetAddr *)EthAddr);
+        }
+        else
+        {
+            MemacDelHashMacAddress(h_Memac,(t_EnetAddr *)EthAddr);
+        }
+    }
+    pChar[0] = 0x33;
+    pChar[1] = 0x33;
+    for(ii=0;ii<=15;ii++)
+    {
+        pChar[2] = ii>>3 & 1;
+        pChar[3] = ii>>2 & 1;
+        pChar[4] = ii>>1 & 1;
+        pChar[5] = ii>>0 & 1;
+        if(newVal)
+        {
+            MemacAddHashMacAddress(h_Memac, (t_EnetAddr *)EthAddr);
+        }
+        else
+        {
+            MemacDelHashMacAddress(h_Memac, (t_EnetAddr *)EthAddr);
+        }
+    }
+    return E_OK;
+}
+
+/* ......................................................................... */
+
 static void InitFmMacControllerDriver(t_FmMacControllerDriver *p_FmMacControllerDriver)
 {
     p_FmMacControllerDriver->f_FM_MAC_Init                      = MemacInit;
@@ -1077,6 +1163,7 @@ static void InitFmMacControllerDriver(t_FmMacControllerDriver *p_FmMacController
     p_FmMacControllerDriver->f_FM_MAC_Disable1588TimeStamp      = NULL;
 
     p_FmMacControllerDriver->f_FM_MAC_SetPromiscuous            = MemacSetPromiscuous;
+    p_FmMacControllerDriver->f_FM_MAC_SetAllMulti               = MemacSetAllMulti;
     p_FmMacControllerDriver->f_FM_MAC_AdjustLink                = MemacAdjustLink;
     p_FmMacControllerDriver->f_FM_MAC_RestartAutoneg            = NULL;
 
@@ -1102,6 +1189,7 @@ static void InitFmMacControllerDriver(t_FmMacControllerDriver *p_FmMacController
     p_FmMacControllerDriver->f_FM_MAC_GetId                     = MemacGetId;
     p_FmMacControllerDriver->f_FM_MAC_GetVersion                = NULL;
     p_FmMacControllerDriver->f_FM_MAC_GetMaxFrameLength         = MemacGetMaxFrameLength;
+    p_FmMacControllerDriver->f_FM_MAC_SetMaxFrameLength         = MemacSetMaxFrameLength;
 
     p_FmMacControllerDriver->f_FM_MAC_MII_WritePhyReg           = MEMAC_MII_WritePhyReg;
     p_FmMacControllerDriver->f_FM_MAC_MII_ReadPhyReg            = MEMAC_MII_ReadPhyReg;

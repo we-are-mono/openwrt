@@ -13,11 +13,12 @@
 # OpenWrt's FILES_DIR overlay + normal patch flow then apply them onto OpenWrt's OWN
 # kernel -- no git-cloned vendor kernel, no custom Kernel/Prepare.
 #
-# ASK is the SINGLE pin. ASK's patches are developed against a specific NXP SDK
-# overlay, and ASK records that overlay in a format-neutral pin file per kernel line
-# (pins/<line>/nxp-sdk-srcrev.inc, one line: NXP_SDK_SRCREV = "<sha>"). This script
-# fetches ASK@ASK_VERSION and READS that ref, so the SDK ref can never drift from
-# what ASK was built against -- ASK_VERSION is the only pin to bump.
+# ASK is the SINGLE pin. Since mono-1.6.0 ASK carries the SDK itself: one copy,
+# sdk/linux/ (NXP's code with ASK's changes made in place), laid out as a kernel
+# tree and built by every line -- this script copies it. An older ASK records an
+# NXP SDK ref per kernel line instead (pins/<line>/nxp-sdk-srcrev.inc, one line:
+# NXP_SDK_SRCREV = "<sha>"); the script then fetches NXP at that ref. Either way the
+# SDK can never drift from what ASK was built against -- ASK_VERSION is the only pin.
 #
 # --check: don't write anything; fetch the pinned upstreams and DIFF them against the
 # committed tree, exiting nonzero on any drift. This is the drift guard -- the cut runs
@@ -47,7 +48,7 @@ LINE=$(sed -n 's/^KERNEL_PATCHVER *:= *\([0-9.]*\).*/\1/p' target/linux/layersca
 # ASK is the single authoritative pin. The NXP SDK ref is READ from ASK's recipe
 # (NXP_SDK_SRCREV) below, never hand-maintained here.
 ASK_URL="https://github.com/we-are-mono/ASK.git"
-ASK_VERSION="3a081ac72bfa43322df0c3da5a49c6a80160a434"
+ASK_VERSION="8553df4c9c0124cd99a88ec04e8fca93a960a3bc"
 NXP_URL="https://github.com/nxp-qoriq/linux.git"
 
 # ASK hooks mono must FORWARD-PORT because OpenWrt is not stock mainline: on 6.12, 070
@@ -76,7 +77,13 @@ sparse_fetch() {  # url ref tmp path...
 	case "$_url" in
 	file://*)
 		_repo=${_url#file://}
-		git -C "$_repo" archive "$_ref" "$@" | tar -x -C "$_tmp"
+		# archive refuses a path the ref lacks (pins/ or sdk/ exist only in some ASKs)
+		_have=""
+		for _p in "$@"; do
+			[ -n "$(git -C "$_repo" ls-tree --name-only "$_ref" -- "$_p")" ] && _have="$_have $_p"
+		done
+		# shellcheck disable=SC2086
+		git -C "$_repo" archive "$_ref" $_have | tar -x -C "$_tmp"
 		;;
 	*)
 		git -C "$_tmp" init -q
@@ -109,7 +116,7 @@ trap 'rm -rf "$KTMP" "$ATMP"' EXIT
 
 # ===== 1. Fetch ASK (single pin): kernel patch series + board DTS + the SDK pin =====
 echo "sync-ask-kernel [$MODE]: fetching ASK @ $ASK_VERSION"
-sparse_fetch "$ASK_URL" "$ASK_VERSION" "$ATMP" patches/kernel dts pins
+sparse_fetch "$ASK_URL" "$ASK_VERSION" "$ATMP" patches/kernel dts pins sdk
 
 # The kernel lines the pinned ASK is released for: its top-level RELEASED_LINES
 # (the cone sparse checkout brings top-level files along; a LOCAL archive is
@@ -134,42 +141,11 @@ if ! printf '%s\n' "$ASK_RELEASED" | grep -qx "$LINE"; then
 	fi
 fi
 
-# ASK's format-neutral NXP SDK SRCREV pin and series for this line.
-if [ -f "$ATMP/pins/$LINE/nxp-sdk-srcrev.inc" ]; then
-	ASK_SDK_PIN="pins/$LINE/nxp-sdk-srcrev.inc"
-	ASK_SERIES="patches/kernel/$LINE"
-elif [ -f "$ATMP/pins/nxp-sdk-srcrev.inc" ]; then
-	ASK_SDK_PIN="pins/nxp-sdk-srcrev.inc"
-	ASK_SERIES="patches/kernel"
-else
-	echo "  ERROR: ASK@$ASK_VERSION carries no NXP SDK pin for kernel $LINE" >&2; exit 1
-fi
-echo "sync-ask-kernel [$MODE]: kernel $LINE, ASK series $ASK_SERIES"
-
-# The single-pin source of truth: read the NXP SDK overlay ref from ASK's pin file.
-NXP_SDK_REF=$(sed -n 's/^NXP_SDK_SRCREV *= *"\([0-9a-fA-F]\{40\}\)".*/\1/p' "$ATMP/$ASK_SDK_PIN" | head -1)
-[ -n "$NXP_SDK_REF" ] || { echo "  ERROR: could not read NXP_SDK_SRCREV from ASK $ASK_SDK_PIN" >&2; exit 1; }
-echo "sync-ask-kernel [$MODE]: ASK pins NXP SDK @ $NXP_SDK_REF"
-
-# ===== 2. NXP SDK driver source -> files/ =====
-SDK_SPARSE="drivers/net/ethernet/freescale/sdk_dpaa
+# The SDK and series for this line. ASK >= mono-1.6.0 carries the SDK as one copy
+# (sdk/linux) for every line; before that, a per-line NXP SDK ref (pins/).
+SDK_PATHS_COMMON="drivers/net/ethernet/freescale/sdk_dpaa
 drivers/net/ethernet/freescale/sdk_fman
 drivers/staging/fsl_qbman
-include/uapi/linux/fmd
-include/linux
-arch/arm64/boot/dts/freescale"
-# PRISTINE NXP only. ASK-added files (e.g. include/linux/fsl_oh_port.h, from patch
-# 010-ask-fman-dpaa-ehash) arrive with the patch series below, never from here.
-# The dts includes are the SDK-flavour DPAA device tree: the 3 SDK-only fragments
-# (portals-sdk, dpaa-eth) PLUS the SoC base + FMan port defs (fsl-ls1046a/-post,
-# qoriq-{q,b}man-portals, qoriq-fman3-0*). mainline's same-named files carry
-# mainline FMan/DPAA bindings the NXP SDK drivers can't probe (fman-port -EIO,
-# oh_port NULL-deref), so the whole base is vendored to shadow them. The board
-# mono-gateway-dk.dts (ASK-owned, synced separately below) pulls them in.
-SDK_PATHS="drivers/net/ethernet/freescale/sdk_dpaa
-drivers/net/ethernet/freescale/sdk_fman
-drivers/staging/fsl_qbman
-include/uapi/linux/fmd
 include/linux/fsl_bman.h
 include/linux/fsl_qman.h
 include/linux/fsl_usdpaa.h
@@ -189,28 +165,97 @@ arch/arm64/boot/dts/freescale/qoriq-fman3-0-1g-4.dtsi
 arch/arm64/boot/dts/freescale/qoriq-fman3-0-1g-5.dtsi
 arch/arm64/boot/dts/freescale/qoriq-fman3-0-10g-0.dtsi
 arch/arm64/boot/dts/freescale/qoriq-fman3-0-10g-1.dtsi"
-# What a line's SDK adds, as ASK's linux-ask_<line>.bb overlays it too: lf-6.18's
-# fsl-ls1046a.dtsi includes the RCPM binding header, which mainline lacks.
-case "$LINE" in
-6.18)
-	SDK_SPARSE="$SDK_SPARSE
-include/dt-bindings/soc"
-	SDK_PATHS="$SDK_PATHS
+# Every path any ASK's SDK ever installed here: one the active set no longer
+# names is removed (sync) or flagged (check), so it can't linger in the kernel.
+SDK_PATHS_KNOWN="$SDK_PATHS_COMMON
+include/uapi/linux/fmd
 include/dt-bindings/soc/fsl,qoriq-rcpm.h"
-	;;
-esac
 
-echo "sync-ask-kernel [$MODE]: fetching NXP SDK @ $NXP_SDK_REF"
-# shellcheck disable=SC2086
-sparse_fetch "$NXP_URL" "$NXP_SDK_REF" "$KTMP" $SDK_SPARSE
+if [ -d "$ATMP/sdk/linux" ] && [ -d "$ATMP/patches/kernel/$LINE" ]; then
+	# ASK's copy, as meta-ask's do_overlay_sdk lays it (its NXP_SDK_PATHS). Like
+	# the recipe, refuse a file in the copy outside those paths: it would be in
+	# ASK yet in no kernel tree.
+	ASK_SERIES="patches/kernel/$LINE"
+	SDK_SRC="$ATMP/sdk/linux"
+	SDK_PATHS="$SDK_PATHS_COMMON
+include/dt-bindings/soc/fsl,qoriq-rcpm.h"
+	SDK_REF="ASK sdk/linux @ $ASK_VERSION"
+	for f in $(cd "$SDK_SRC" && find . \( -type f -o -type l \) | sed 's|^\./||'); do
+		_ok=0
+		for p in $SDK_PATHS; do case "$f" in "$p"|"$p"/*) _ok=1; break ;; esac; done
+		[ "$_ok" = 1 ] || { echo "  ERROR: ASK sdk/linux/$f is outside the SDK paths this script installs" >&2; exit 1; }
+	done
+	echo "sync-ask-kernel [$MODE]: kernel $LINE, ASK series $ASK_SERIES, SDK from ASK sdk/linux"
+else
+	if [ -f "$ATMP/pins/$LINE/nxp-sdk-srcrev.inc" ]; then
+		ASK_SDK_PIN="pins/$LINE/nxp-sdk-srcrev.inc"
+		ASK_SERIES="patches/kernel/$LINE"
+	elif [ -f "$ATMP/pins/nxp-sdk-srcrev.inc" ]; then
+		ASK_SDK_PIN="pins/nxp-sdk-srcrev.inc"
+		ASK_SERIES="patches/kernel"
+	else
+		echo "  ERROR: ASK@$ASK_VERSION carries neither sdk/linux nor an NXP SDK pin for kernel $LINE" >&2; exit 1
+	fi
+	echo "sync-ask-kernel [$MODE]: kernel $LINE, ASK series $ASK_SERIES"
+
+	# The single-pin source of truth: read the NXP SDK overlay ref from ASK's pin file.
+	NXP_SDK_REF=$(sed -n 's/^NXP_SDK_SRCREV *= *"\([0-9a-fA-F]\{40\}\)".*/\1/p' "$ATMP/$ASK_SDK_PIN" | head -1)
+	[ -n "$NXP_SDK_REF" ] || { echo "  ERROR: could not read NXP_SDK_SRCREV from ASK $ASK_SDK_PIN" >&2; exit 1; }
+	echo "sync-ask-kernel [$MODE]: ASK pins NXP SDK @ $NXP_SDK_REF"
+
+	# PRISTINE NXP only. ASK-added files (e.g. include/linux/fsl_oh_port.h, from patch
+	# 010-ask-fman-dpaa-ehash) arrive with the patch series below, never from here.
+	# The dts includes are the SDK-flavour DPAA device tree: the 3 SDK-only fragments
+	# (portals-sdk, dpaa-eth) PLUS the SoC base + FMan port defs (fsl-ls1046a/-post,
+	# qoriq-{q,b}man-portals, qoriq-fman3-0*). mainline's same-named files carry
+	# mainline FMan/DPAA bindings the NXP SDK drivers can't probe (fman-port -EIO,
+	# oh_port NULL-deref), so the whole base is vendored to shadow them. The board
+	# mono-gateway-dk.dts (ASK-owned, synced separately below) pulls them in.
+	SDK_SPARSE="drivers/net/ethernet/freescale/sdk_dpaa
+drivers/net/ethernet/freescale/sdk_fman
+drivers/staging/fsl_qbman
+include/uapi/linux/fmd
+include/linux
+arch/arm64/boot/dts/freescale"
+	SDK_PATHS="$SDK_PATHS_COMMON
+include/uapi/linux/fmd"
+	# What a line's SDK adds, as ASK's linux-ask_<line>.bb overlays it too: lf-6.18's
+	# fsl-ls1046a.dtsi includes the RCPM binding header, which mainline lacks.
+	case "$LINE" in
+	6.18)
+		SDK_SPARSE="$SDK_SPARSE
+include/dt-bindings/soc"
+		SDK_PATHS="$SDK_PATHS
+include/dt-bindings/soc/fsl,qoriq-rcpm.h"
+		;;
+	esac
+
+	echo "sync-ask-kernel [$MODE]: fetching NXP SDK @ $NXP_SDK_REF"
+	# shellcheck disable=SC2086
+	sparse_fetch "$NXP_URL" "$NXP_SDK_REF" "$KTMP" $SDK_SPARSE
+	SDK_SRC="$KTMP"
+	SDK_REF="$NXP_SDK_REF"
+fi
+
+# ===== 2. SDK driver source + DPAA device tree -> files/ =====
 for p in $SDK_PATHS; do
-	[ -e "$KTMP/$p" ] || { echo "  MISSING in NXP source: $p (ASK-added files come from the patch series)" >&2; exit 1; }
-	install_item "$KTMP/$p" "$FILES/$p" "SDK $p"
+	[ -e "$SDK_SRC/$p" ] || { echo "  MISSING in SDK source: $p (ASK-added files come from the patch series)" >&2; exit 1; }
+	install_item "$SDK_SRC/$p" "$FILES/$p" "SDK $p"
+done
+for p in $SDK_PATHS_KNOWN; do
+	case "
+$SDK_PATHS
+" in *"
+$p
+"*) continue ;; esac
+	[ -e "$FILES/$p" ] || continue
+	if [ "$MODE" = check ]; then echo "  DRIFT: stale SDK $p (not in this ASK's SDK)"; DRIFT=1
+	else rm -rf "${FILES:?}/$p"; echo "  removed stale SDK $p"; fi
 done
 if [ "$MODE" = check ]; then
-	[ "$(cat "$FILES/.nxp-sdk-ref" 2>/dev/null || true)" = "$NXP_SDK_REF" ] || { echo "  DRIFT: $FILES/.nxp-sdk-ref != $NXP_SDK_REF"; DRIFT=1; }
+	[ "$(cat "$FILES/.nxp-sdk-ref" 2>/dev/null || true)" = "$SDK_REF" ] || { echo "  DRIFT: $FILES/.nxp-sdk-ref != $SDK_REF"; DRIFT=1; }
 else
-	printf '%s\n' "$NXP_SDK_REF" > "$FILES/.nxp-sdk-ref"
+	printf '%s\n' "$SDK_REF" > "$FILES/.nxp-sdk-ref"
 fi
 
 # ===== 3. ASK kernel patch series -> patches-<line>/ =====
@@ -251,7 +296,7 @@ fi
 install_item "$ATMP/dts/mono-gateway-dk.dts" "$FILES/$BOARD_DTS" "board DTS $BOARD_DTS"
 
 if [ "$MODE" = check ]; then
-	[ "$DRIFT" = 0 ] && echo "sync-ask-kernel: OK -- tree matches ASK@$ASK_VERSION + NXP@$NXP_SDK_REF" \
+	[ "$DRIFT" = 0 ] && echo "sync-ask-kernel: OK -- tree matches ASK@$ASK_VERSION + SDK $SDK_REF" \
 		|| { echo "sync-ask-kernel: DRIFT detected -- run scripts/mono-sync-ask-kernel.sh to refresh" >&2; exit 1; }
 else
 	echo "sync-ask-kernel: done -- $(find "$FILES" -type f ! -name '.nxp-sdk-ref' | wc -l) SDK/DTS files + $(echo $fetched | wc -w) ASK kernel patches"

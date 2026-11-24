@@ -168,12 +168,10 @@ typedef uint32_t fmPcdEngines_t; /**< options as defined below: */
 /***********************************************************************/
 /*          SW parser OFFLOAD labels (offsets)                         */
 /***********************************************************************/
-#define OFFLOAD_SW_PATCH_IPv4_IPR_LABEL         0x100
 /* Will be used for:
  * 1. identify fragments
  * 2. udp-lite
  */
-#define OFFLOAD_SW_PATCH_IPv6_IPR_LABEL         0x146
 /* Will be used for:
  * 1. will identify the fragmentable area
  * 2. udp-lite
@@ -185,9 +183,6 @@ typedef uint32_t fmPcdEngines_t; /**< options as defined below: */
  @Description       Memory Mapped Registers
 *//***************************************************************************/
 
-#if defined(__MWERKS__) && !defined(__GNUC__)
-#pragma pack(push,1)
-#endif /* defined(__MWERKS__) && ... */
 
 typedef struct
 {
@@ -427,9 +422,6 @@ typedef _Packed struct
 	uint8_t reserved1[0xa0];    /**< 0x60 - 0xff */
 } _PackedType t_FmPortImPram;
 
-#if defined(__MWERKS__) && !defined(__GNUC__)
-#pragma pack(pop)
-#endif /* defined(__MWERKS__) && ... */
 
 
 /**************************************************************************//**
@@ -743,6 +735,12 @@ typedef struct {
 } t_FmMacIm;
 
 
+struct fm_port_pcd_bindings {
+    bool cc;
+    bool clsPlan;
+    bool schemes;
+};
+
 typedef struct {
     struct fman_port_cfg                dfltCfg;
     uint32_t                            dfltFqid;
@@ -791,9 +789,7 @@ typedef struct {
     bool                                setNumOfOpenDmas;
     bool                                setSizeOfFifo;
     bool                                noScatherGather;
-#ifdef FM_HEAVY_TRAFFIC_HANG_ERRATA_FMAN_A005669
     bool                                bcbWorkaround;
-#endif /* FM_HEAVY_TRAFFIC_HANG_ERRATA_FMAN_A005669 */
 } t_FmPortDriverParam;
 
 
@@ -813,13 +809,26 @@ typedef struct {
     uint8_t                     portId;
     e_FmPortType                portType;
     int                         enabled;
+    /* FM_PORT_Enable() refuses while set (FM_PORT_SetFenced()). Read and
+     * written under h_Spinlock. */
+    bool                        fenced;
     char                        name[MODULE_NAME_SIZE];
     uint8_t                     hardwarePortId;
+    /* FM resource accounting outlives the initialization parameters. */
+    uint8_t                     deqPipelineDepth;
+    bool                        fmPortParamsAllocated;
     uint16_t                    fmClkFreq;
     t_FmPortQmiRegs             *p_FmPortQmiRegs;
     u_FmPortBmiRegs             *p_FmPortBmiRegs;
     t_FmPortPrsRegs             *p_FmPortPrsRegs;
     fmPcdEngines_t              pcdEngines;
+    /* Persist ownership until cleanup succeeds, including a failed setup. */
+    struct fm_port_pcd_bindings pcdBindings;
+    bool                        pcdConfigured;
+    bool                        pcdNetEnvOwner;
+    /* The PCD stays configured, but new frames go to the default queue
+     * (FM_PORT_BypassPCD()). Under the port lock. */
+    bool                        pcdBypassed;
     uint32_t                    savedBmiNia;
     uint8_t                     netEnvId;
     uint32_t                    optArray[FM_PCD_MAX_NUM_OF_OPTIONS(FM_PCD_MAX_NUM_OF_CLS_PLANS)];
@@ -861,9 +870,6 @@ typedef struct {
     t_FmPortRsrc                fifoBufs;
     t_FmPortRxPoolsParams       rxPoolsParams;
 //    bool                        explicitUserSizeOfFifo;
-    t_Handle                    h_IpReassemblyManip;
-    t_Handle                    h_CapwapReassemblyManip;
-    t_Handle                    h_ReassemblyTree;
     uint64_t                    fmMuramPhysBaseAddr;
     bool                        vspe;
     uint8_t                     dfltRelativeId;
@@ -884,12 +890,7 @@ t_Error FmPortImDisable (t_FmPort *p_FmPort);
 t_Error FmPortImRx      (t_FmPort *p_FmPort);
 
 void    FmPortSetMacsecLcv(t_Handle h_FmPort);
-void    FmPortSetMacsecCmd(t_Handle h_FmPort, uint8_t dfltSci);
 
-
-t_Error FM_PORT_SetNumOfOpenDmas(t_Handle h_FmPort, t_FmPortRsrc *p_NumOfOpenDmas);
-t_Error FM_PORT_SetNumOfTasks(t_Handle h_FmPort, t_FmPortRsrc *p_NumOfTasks);
-t_Error FM_PORT_SetSizeOfFifo(t_Handle h_FmPort, t_FmPortRsrc *p_SizeOfFifo);
 
 static __inline__ uint8_t * BdBufferGet (t_PhysToVirt *f_PhysToVirt, t_FmImBd *p_Bd)
 {

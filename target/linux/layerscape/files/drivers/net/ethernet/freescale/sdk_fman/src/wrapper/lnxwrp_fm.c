@@ -42,7 +42,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/fs.h>
-#include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/irq.h>
 #include <linux/interrupt.h>
@@ -66,9 +65,8 @@
 #include "debug_ext.h"
 #include "sys_io_ext.h"
 
-#include "fm_ioctls.h"
-
 #include "lnxwrp_fm.h"
+#include "lnxwrp_fsl_fman.h"
 #include "lnxwrp_fm_port.h"
 #include "lnxwrp_resources.h"
 #include "lnxwrp_sysfs_fm.h"
@@ -132,20 +130,10 @@ int fsl_fm_max_frm = CONFIG_FSL_FM_MAX_FRAME_SIZE;
  */
 int fsl_fm_rx_extra_headroom = CONFIG_FSL_FM_RX_EXTRA_HEADROOM;
 
-#ifdef CONFIG_FMAN_PFC
-static int fsl_fm_pfc_quanta[] = {
-		CONFIG_FMAN_PFC_QUANTA_0,
-		CONFIG_FMAN_PFC_QUANTA_1,
-		CONFIG_FMAN_PFC_QUANTA_2,
-		CONFIG_FMAN_PFC_QUANTA_3
-};
-#endif
 
 static t_LnxWrpFm   lnxWrpFm;
 
-#ifdef FM_ERRATUM_A050385
 static bool fm_has_err_a050385;
-#endif
 
 int fm_get_max_frm(void)
 {
@@ -159,13 +147,11 @@ int fm_get_rx_extra_headroom(void)
 }
 EXPORT_SYMBOL(fm_get_rx_extra_headroom);
 
-#ifdef FM_ERRATUM_A050385
 bool fm_has_errata_a050385(void)
 {
 	return fm_has_err_a050385;
 }
 EXPORT_SYMBOL(fm_has_errata_a050385);
-#endif
 
 static int __init fm_set_max_frm(char *str)
 {
@@ -363,20 +349,29 @@ typedef _Packed struct {
     static const uint8_t     phys10GTxPortId[] = {0x30,0x31};
 
     p_Plr = (t_Plr *)UINT_TO_PTR(p_LnxWrpFmDev->fmBaseAddr+FM_DMA_PLR_OFFSET);
+    p_Ppids = (t_Ppids *)UINT_TO_PTR(p_LnxWrpFmDev->fmBaseAddr+FM_BMI_PPIDS_OFFSET);
 #ifdef MODULE
     for (i=0;i<FM_MAX_NUM_OF_PARTITIONS/2;i++)
         p_Plr->plr[i] = 0;
 #endif /* MODULE */
 
+    /* Both tables are big-endian FMan registers, read here before FM_Init()
+     * resets the FMan; the port drivers program the values back. FMBM_PPID
+     * holds the ICID the boot firmware assigned each port, which the port
+     * stamps into every frame descriptor it enqueues. Firmware gives the
+     * FMan ports and the QMan software portals the same ICID, and SEC relies
+     * on that: it shares a descriptor, and the ESP sequence number stored in
+     * it, only between jobs whose frames carry the same ICID. A native load
+     * on a little-endian core lost the value, left every port at ICID 0, and
+     * let CPU- and FMan-fed jobs of one IPsec SA reuse sequence numbers. */
     for (i=0; i<FM_MAX_NUM_OF_PARTITIONS; i++)
     {
+        uint32_t plr = GET_UINT32(p_Plr->plr[i/2]);
         uint16_t liodnBase = (uint16_t)((i%2) ?
-                       (p_Plr->plr[i/2] & DMA_LOW_LIODN_MASK) :
-                       ((p_Plr->plr[i/2] & DMA_HIGH_LIODN_MASK) >> DMA_LIODN_SHIFT));
-#ifdef FM_PARTITION_ARRAY
-        /* TODO: this was .liodnPerPartition[i] = liodnBase; is the index meaning the same? */
-        p_LnxWrpFmDev->fmDevSettings.param.liodnBasePerPort[i] = liodnBase;
-#endif /* FM_PARTITION_ARRAY */
+                       (plr & DMA_LOW_LIODN_MASK) :
+                       ((plr & DMA_HIGH_LIODN_MASK) >> DMA_LIODN_SHIFT));
+        uint16_t liodnOffset = i ?
+                       (uint16_t)(GET_UINT32(p_Ppids->fmbm_ppid[i-1]) & FM_LIODN_OFFSET_MASK) : 0;
 
         if ((i >= phys1GRxPortId[0]) &&
              (i <= phys1GRxPortId[FM_MAX_NUM_OF_1G_RX_PORTS-1]))
@@ -386,6 +381,7 @@ typedef _Packed struct {
                     break;
             ASSERT_COND(j<ARRAY_SIZE(phys1GRxPortId));
             p_LnxWrpFmDev->rxPorts[j].settings.param.liodnBase = liodnBase;
+            p_LnxWrpFmDev->rxPorts[j].settings.param.specificParams.rxParams.liodnOffset = liodnOffset;
         }
         else if (FM_MAX_NUM_OF_10G_RX_PORTS &&
                  (i >= phys10GRxPortId[0]) &&
@@ -396,6 +392,8 @@ typedef _Packed struct {
                     break;
             ASSERT_COND(j<ARRAY_SIZE(phys10GRxPortId));
             p_LnxWrpFmDev->rxPorts[FM_MAX_NUM_OF_1G_RX_PORTS+j].settings.param.liodnBase = liodnBase;
+            p_LnxWrpFmDev->rxPorts[FM_MAX_NUM_OF_1G_RX_PORTS+j].settings.param.specificParams.rxParams.liodnOffset =
+                    liodnOffset;
         }
         else if ((i >= physOhPortId[0]) &&
                  (i <= physOhPortId[FM_MAX_NUM_OF_OH_PORTS-1]))
@@ -405,9 +403,16 @@ typedef _Packed struct {
                     break;
             ASSERT_COND(j<ARRAY_SIZE(physOhPortId));
             if (j == 0)
+            {
                 p_LnxWrpFmDev->hcPort.settings.param.liodnBase = liodnBase;
+                p_LnxWrpFmDev->hcPort.settings.param.specificParams.nonRxParams.liodnOffset = liodnOffset;
+            }
             else
+            {
                 p_LnxWrpFmDev->opPorts[j - 1].settings.param.liodnBase = liodnBase;
+                p_LnxWrpFmDev->opPorts[j - 1].settings.param.specificParams.nonRxParams.liodnOffset =
+                        liodnOffset;
+            }
         }
         else if ((i >= phys1GTxPortId[0]) &&
                   (i <= phys1GTxPortId[FM_MAX_NUM_OF_1G_TX_PORTS-1]))
@@ -417,6 +422,7 @@ typedef _Packed struct {
                     break;
             ASSERT_COND(j<ARRAY_SIZE(phys1GTxPortId));
             p_LnxWrpFmDev->txPorts[j].settings.param.liodnBase = liodnBase;
+            p_LnxWrpFmDev->txPorts[j].settings.param.specificParams.nonRxParams.liodnOffset = liodnOffset;
         }
         else if (FM_MAX_NUM_OF_10G_TX_PORTS &&
                  (i >= phys10GTxPortId[0]) &&
@@ -427,18 +433,10 @@ typedef _Packed struct {
                     break;
             ASSERT_COND(j<ARRAY_SIZE(phys10GTxPortId));
             p_LnxWrpFmDev->txPorts[FM_MAX_NUM_OF_1G_TX_PORTS+j].settings.param.liodnBase = liodnBase;
+            p_LnxWrpFmDev->txPorts[FM_MAX_NUM_OF_1G_TX_PORTS+j].settings.param.specificParams.nonRxParams.liodnOffset =
+                    liodnOffset;
         }
     }
-
-    p_Ppids = (t_Ppids *)UINT_TO_PTR(p_LnxWrpFmDev->fmBaseAddr+FM_BMI_PPIDS_OFFSET);
-
-    for (i=0; i<FM_MAX_NUM_OF_1G_RX_PORTS; i++)
-        p_LnxWrpFmDev->rxPorts[i].settings.param.specificParams.rxParams.liodnOffset =
-                p_Ppids->fmbm_ppid[phys1GRxPortId[i]-1];
-
-    for (i=0; i<FM_MAX_NUM_OF_10G_RX_PORTS; i++)
-            p_LnxWrpFmDev->rxPorts[FM_MAX_NUM_OF_1G_RX_PORTS+i].settings.param.specificParams.rxParams.liodnOffset =
-                p_Ppids->fmbm_ppid[phys10GRxPortId[i]-1];
 
     return E_OK;
 }
@@ -664,30 +662,6 @@ static t_LnxWrpFmDev * ReadFmDevTreeNode (struct platform_device *of_dev)
         }
     }
 
-#ifdef CONFIG_FSL_SDK_FMAN_RTC_API
-    /* Get the RTC base address and size */
-    memset(ids, 0, sizeof(ids));
-    if (WARN_ON(strlen("ptp-timer") >= sizeof(ids[0].name)))
-        return NULL;
-    strcpy(ids[0].name, "ptp-timer");
-    if (WARN_ON(strlen("fsl,fman-ptp-timer") >= sizeof(ids[0].compatible)))
-        return NULL;
-    strcpy(ids[0].compatible, "fsl,fman-ptp-timer");
-    for_each_child_of_node(fm_node, dev_node) {
-        if (likely(of_match_node(ids, dev_node) != NULL)) {
-            _errno = of_address_to_resource(dev_node, 0, &res);
-            if (unlikely(_errno < 0)) {
-                REPORT_ERROR(MAJOR, E_INVALID_VALUE, ("of_address_to_resource() = %d", _errno));
-                DestroyFmDev(p_LnxWrpFmDev);
-                return NULL;
-            }
-
-            p_LnxWrpFmDev->fmRtcBaseAddr = 0;
-            p_LnxWrpFmDev->fmRtcPhysBaseAddr = res.start;
-            p_LnxWrpFmDev->fmRtcMemSize = res.end + 1 - res.start;
-        }
-    }
-#endif
 
     /* Get the VSP base address */
     for_each_child_of_node(fm_node, dev_node) {
@@ -725,9 +699,7 @@ static t_LnxWrpFmDev * ReadFmDevTreeNode (struct platform_device *of_dev)
             p_LnxWrpFmDev->defPcd = e_NO_PCD;
     }
 
-#ifdef FM_ERRATUM_A050385
     fm_has_err_a050385 = of_property_read_bool(fm_node, "fsl,erratum-a050385");
-#endif
 
     of_node_put(fm_node);
 
@@ -904,21 +876,6 @@ static t_Error ConfigureFmDev(t_LnxWrpFmDev  *p_LnxWrpFmDev)
     if (SYS_RegisterIoMap((uint64_t)p_LnxWrpFmDev->fmMuramBaseAddr, (uint64_t)p_LnxWrpFmDev->fmMuramPhysBaseAddr, p_LnxWrpFmDev->fmMuramMemSize) != E_OK)
         RETURN_ERROR(MAJOR, E_INVALID_STATE, ("FM MURAM memory map"));
 
-#ifdef CONFIG_FSL_SDK_FMAN_RTC_API
-    if (p_LnxWrpFmDev->fmRtcPhysBaseAddr)
-    {
-        dev_res = __devm_request_region(p_LnxWrpFmDev->dev, p_LnxWrpFmDev->res, p_LnxWrpFmDev->fmRtcPhysBaseAddr, p_LnxWrpFmDev->fmRtcMemSize, "fman-ptp-timer");
-        if (unlikely(dev_res == NULL))
-            RETURN_ERROR(MAJOR, E_INVALID_STATE, ("__devm_request_region() failed"));
-
-        p_LnxWrpFmDev->fmRtcBaseAddr = PTR_TO_UINT(devm_ioremap(p_LnxWrpFmDev->dev, p_LnxWrpFmDev->fmRtcPhysBaseAddr, p_LnxWrpFmDev->fmRtcMemSize));
-        if (unlikely(p_LnxWrpFmDev->fmRtcBaseAddr == 0))
-            RETURN_ERROR(MAJOR, E_INVALID_STATE, ("devm_ioremap() failed"));
-
-        if (SYS_RegisterIoMap((uint64_t)p_LnxWrpFmDev->fmRtcBaseAddr, (uint64_t)p_LnxWrpFmDev->fmRtcPhysBaseAddr, p_LnxWrpFmDev->fmRtcMemSize) != E_OK)
-            RETURN_ERROR(MAJOR, E_INVALID_STATE, ("FM-RTC memory map"));
-    }
-#endif
 
     if (p_LnxWrpFmDev->fmVspPhysBaseAddr) {
         dev_res = __devm_request_region(p_LnxWrpFmDev->dev, p_LnxWrpFmDev->res, p_LnxWrpFmDev->fmVspPhysBaseAddr, p_LnxWrpFmDev->fmVspMemSize, "fman-vsp");
@@ -1026,26 +983,6 @@ static t_Error InitFmDev(t_LnxWrpFmDev  *p_LnxWrpFmDev)
          * FM_SetException(p_LnxWrpFmDev->h_Dev,e_FM_EX_MURAM_ECC,FALSE);*/
     }
 
-#ifdef CONFIG_FSL_SDK_FMAN_RTC_API
-    if (p_LnxWrpFmDev->fmRtcBaseAddr)
-    {
-        t_FmRtcParams   fmRtcParam;
-
-        memset(&fmRtcParam, 0, sizeof(fmRtcParam));
-        fmRtcParam.h_App = p_LnxWrpFmDev;
-        fmRtcParam.h_Fm = p_LnxWrpFmDev->h_Dev;
-        fmRtcParam.baseAddress = p_LnxWrpFmDev->fmRtcBaseAddr;
-
-        if(!(p_LnxWrpFmDev->h_RtcDev = FM_RTC_Config(&fmRtcParam)))
-            RETURN_ERROR(MAJOR, E_INVALID_HANDLE, ("FM-RTC"));
-
-	if (FM_RTC_ConfigPeriod(p_LnxWrpFmDev->h_RtcDev, DPA_PTP_NOMINAL_FREQ_PERIOD_NS) != E_OK)
-	    RETURN_ERROR(MAJOR, E_INVALID_STATE, ("FM-RTC"));
-
-        if (FM_RTC_Init(p_LnxWrpFmDev->h_RtcDev) != E_OK)
-            RETURN_ERROR(MAJOR, E_INVALID_STATE, ("FM-RTC"));
-    }
-#endif
 
     return E_OK;
 }
@@ -1066,10 +1003,16 @@ static void FqFree(struct qman_fq *fq)
 	XX_Free((t_FmTestFq *) fq);
 }
 
-static void FreeFmPcdDev(t_LnxWrpFmDev *p_LnxWrpFmDev)
+static t_Error FreeFmPcdDev(t_LnxWrpFmDev *p_LnxWrpFmDev)
 {
-	if (p_LnxWrpFmDev->h_PcdDev)
-		FM_PCD_Free(p_LnxWrpFmDev->h_PcdDev);
+	t_Error err;
+
+	if (p_LnxWrpFmDev->h_PcdDev) {
+		err = FM_PCD_Free(p_LnxWrpFmDev->h_PcdDev);
+		if (err)
+			return err;
+		p_LnxWrpFmDev->h_PcdDev = NULL;
+	}
 
 	if (p_LnxWrpFmDev->hc_tx_err_fq)
 		FqFree(p_LnxWrpFmDev->hc_tx_err_fq);
@@ -1079,19 +1022,21 @@ static void FreeFmPcdDev(t_LnxWrpFmDev *p_LnxWrpFmDev)
 
 	if (p_LnxWrpFmDev->hc_tx_fq)
 		FqFree(p_LnxWrpFmDev->hc_tx_fq);
+
+	return E_OK;
 }
 
-static void FreeFmDev(t_LnxWrpFmDev  *p_LnxWrpFmDev)
+static t_Error FreeFmDev(t_LnxWrpFmDev  *p_LnxWrpFmDev)
 {
+    t_Error err;
+
     if (!p_LnxWrpFmDev->active)
-        return;
+        return E_OK;
 
-    FreeFmPcdDev(p_LnxWrpFmDev);
+    err = FreeFmPcdDev(p_LnxWrpFmDev);
+    if (err)
+        RETURN_ERROR(MAJOR, err, ("FMan HC cleanup refused; board reset required"));
 
-#ifdef CONFIG_FSL_SDK_FMAN_RTC_API
-    if (p_LnxWrpFmDev->h_RtcDev)
-	FM_RTC_Free(p_LnxWrpFmDev->h_RtcDev);
-#endif
 
     if (p_LnxWrpFmDev->h_Dev)
         FM_Free(p_LnxWrpFmDev->h_Dev);
@@ -1099,14 +1044,6 @@ static void FreeFmDev(t_LnxWrpFmDev  *p_LnxWrpFmDev)
     if (p_LnxWrpFmDev->h_MuramDev)
         FM_MURAM_Free(p_LnxWrpFmDev->h_MuramDev);
 
-#ifdef CONFIG_FSL_SDK_FMAN_RTC_API
-    if (p_LnxWrpFmDev->fmRtcBaseAddr)
-    {
-        SYS_UnregisterIoMap(p_LnxWrpFmDev->fmRtcBaseAddr);
-        devm_iounmap(p_LnxWrpFmDev->dev, UINT_TO_PTR(p_LnxWrpFmDev->fmRtcBaseAddr));
-        __devm_release_region(p_LnxWrpFmDev->dev, p_LnxWrpFmDev->res, p_LnxWrpFmDev->fmRtcPhysBaseAddr, p_LnxWrpFmDev->fmRtcMemSize);
-    }
-#endif
     SYS_UnregisterIoMap(p_LnxWrpFmDev->fmMuramBaseAddr);
     devm_iounmap(p_LnxWrpFmDev->dev, UINT_TO_PTR(p_LnxWrpFmDev->fmMuramBaseAddr));
     __devm_release_region(p_LnxWrpFmDev->dev, p_LnxWrpFmDev->res, p_LnxWrpFmDev->fmMuramPhysBaseAddr, p_LnxWrpFmDev->fmMuramMemSize);
@@ -1118,10 +1055,8 @@ static void FreeFmDev(t_LnxWrpFmDev  *p_LnxWrpFmDev)
     }
 
     devm_free_irq(p_LnxWrpFmDev->dev, p_LnxWrpFmDev->irq, p_LnxWrpFmDev);
+    return E_OK;
 }
-
-/* FMan character device file operations */
-extern struct file_operations fm_fops;
 
 static int /*__devinit*/ fm_probe(struct platform_device *of_dev)
 {
@@ -1138,46 +1073,14 @@ static int /*__devinit*/ fm_probe(struct platform_device *of_dev)
         return -EIO;
     }
 
-    /* IOCTL ABI checking */
-    LnxWrpPCDIOCTLEnumChecking();
-    LnxWrpPCDIOCTLTypeChecking();
+    /* Port names ("fm0-port-rx6") are built from this one. */
+    Sprint (p_LnxWrpFmDev->name, "fm%d", p_LnxWrpFmDev->id);
 
-    Sprint (p_LnxWrpFmDev->name, "%s%d", DEV_FM_NAME, p_LnxWrpFmDev->id);
-
-    /* Register to the /dev for IOCTL API */
-    /* Register dynamically a new major number for the character device: */
-    if ((p_LnxWrpFmDev->major = register_chrdev(0, p_LnxWrpFmDev->name, &fm_fops)) <= 0) {
-        FreeFmDev(p_LnxWrpFmDev);
-        REPORT_ERROR(MAJOR, E_INVALID_STATE, ("Failed to allocate a major number for device \"%s\"", p_LnxWrpFmDev->name));
-        return -EIO;
-    }
-
-    /* Creating classes for FM */
-    DBG(TRACE ,("class_create fm_class"));
-    p_LnxWrpFmDev->fm_class = class_create(p_LnxWrpFmDev->name);
-    if (IS_ERR(p_LnxWrpFmDev->fm_class)) {
-        unregister_chrdev(p_LnxWrpFmDev->major, p_LnxWrpFmDev->name);
-        FreeFmDev(p_LnxWrpFmDev);
-        REPORT_ERROR(MAJOR, E_INVALID_STATE, ("class_create error fm_class"));
-        return -EIO;
-    }
-
-    device_create(p_LnxWrpFmDev->fm_class, NULL, MKDEV(p_LnxWrpFmDev->major, DEV_FM_MINOR_BASE), NULL,
-                  "fm%d", p_LnxWrpFmDev->id);
-    device_create(p_LnxWrpFmDev->fm_class, NULL, MKDEV(p_LnxWrpFmDev->major, DEV_FM_PCD_MINOR_BASE), NULL,
-                  "fm%d-pcd", p_LnxWrpFmDev->id);
     dev_set_drvdata(p_LnxWrpFmDev->dev, p_LnxWrpFmDev);
 
    /* create sysfs entries for stats and regs */
     if ( fm_sysfs_create(p_LnxWrpFmDev->dev) !=0 )
     {
-		device_destroy(p_LnxWrpFmDev->fm_class,
-			       MKDEV(p_LnxWrpFmDev->major, DEV_FM_MINOR_BASE));
-		device_destroy(p_LnxWrpFmDev->fm_class,
-			       MKDEV(p_LnxWrpFmDev->major,
-				     DEV_FM_PCD_MINOR_BASE));
-		class_destroy(p_LnxWrpFmDev->fm_class);
-		unregister_chrdev(p_LnxWrpFmDev->major, p_LnxWrpFmDev->name);
         FreeFmDev(p_LnxWrpFmDev);
         REPORT_ERROR(MAJOR, E_INVALID_STATE, ("Unable to create sysfs entry - fm!!!"));
         return -EIO;
@@ -1202,15 +1105,8 @@ static void fm_remove(struct platform_device *of_dev)
 
     fm_sysfs_destroy(dev);
 
-    DBG(TRACE, ("destroy fm_class"));
-    device_destroy(p_LnxWrpFmDev->fm_class, MKDEV(p_LnxWrpFmDev->major, DEV_FM_MINOR_BASE));
-    device_destroy(p_LnxWrpFmDev->fm_class, MKDEV(p_LnxWrpFmDev->major, DEV_FM_PCD_MINOR_BASE));
-    class_destroy(p_LnxWrpFmDev->fm_class);
-
-    /* Destroy chardev */
-    unregister_chrdev(p_LnxWrpFmDev->major, p_LnxWrpFmDev->name);
-
-    FreeFmDev(p_LnxWrpFmDev);
+    if (FreeFmDev(p_LnxWrpFmDev) != E_OK)
+        return;
 
     DestroyFmDev(p_LnxWrpFmDev);
 
@@ -1232,6 +1128,9 @@ static struct platform_driver fm_driver = {
         .name           = "fsl-fman",
         .of_match_table    = fm_match,
         .owner          = THIS_MODULE,
+        /* Built-in FMan has no DMA drain/reset path for a timed-out HC.
+         * A void remove cannot veto devres cleanup: require a board reset. */
+        .suppress_bind_attrs = true,
     },
     .probe          = fm_probe,
     .remove         = fm_remove
@@ -1287,15 +1186,26 @@ void * fm_get_handle(struct fm *fm)
 }
 EXPORT_SYMBOL(fm_get_handle);
 
-#ifdef CONFIG_FSL_SDK_FMAN_RTC_API
-void * fm_get_rtc_handle(struct fm *fm)
+int fm_get_fw_rev(struct fm *fm, u16 *package, u8 *major, u8 *minor)
 {
-    t_LnxWrpFmDev       *p_LnxWrpFmDev = (t_LnxWrpFmDev*)fm;
+    t_LnxWrpFmDev               *p_LnxWrpFmDev = (t_LnxWrpFmDev*)fm;
+    t_FmCtrlCodeRevisionInfo    rv;
+    t_Error                     err;
 
-    return (void *)p_LnxWrpFmDev->h_RtcDev;
+    if (!p_LnxWrpFmDev || !p_LnxWrpFmDev->active || !p_LnxWrpFmDev->h_Dev)
+        return -ENODEV;
+
+    err = FM_GetFmanCtrlCodeRevision((t_Handle)p_LnxWrpFmDev->h_Dev, &rv);
+    if (err != E_OK)
+        return -EIO;
+
+    if (package) *package = rv.packageRev;
+    if (major)   *major   = rv.majorRev;
+    if (minor)   *minor   = rv.minorRev;
+    return 0;
 }
-EXPORT_SYMBOL(fm_get_rtc_handle);
-#endif
+EXPORT_SYMBOL(fm_get_fw_rev);
+
 
 struct fm_port * fm_port_bind (struct device *fm_port_dev)
 {
@@ -1318,6 +1228,34 @@ void *fm_port_get_handle(const struct fm_port *port)
     return (void *)p_LnxWrpFmPortDev->h_Dev;
 }
 EXPORT_SYMBOL(fm_port_get_handle);
+
+int fm_port_get_hwid(const struct fm_port *port)
+{
+	t_LnxWrpFmPortDev *p_LnxWrpFmPortDev = (t_LnxWrpFmPortDev*)port;
+	return(FmPortGetHardwarePortId(p_LnxWrpFmPortDev->h_Dev));
+
+}
+EXPORT_SYMBOL(fm_port_get_hwid);
+
+/* The ICID the port stamps into the frames it enqueues: its FMBM_SPLIODN, as
+ * the FMan holds it now rather than as the port was configured. */
+int fm_port_get_icid(const struct fm_port *port)
+{
+	const t_LnxWrpFmPortDev *p_LnxWrpFmPortDev = (const t_LnxWrpFmPortDev *)port;
+	const t_LnxWrpFmDev *p_LnxWrpFmDev = p_LnxWrpFmPortDev->h_LnxWrpFmDev;
+	volatile uint32_t *p_Spliodn;
+	uint8_t hwid;
+
+	if (!p_LnxWrpFmDev || !p_LnxWrpFmPortDev->h_Dev)
+		return -ENODEV;
+	hwid = FmPortGetHardwarePortId(p_LnxWrpFmPortDev->h_Dev);
+	if (hwid < 1 || hwid > 63)
+		return -EINVAL;
+	p_Spliodn = UINT_TO_PTR(p_LnxWrpFmDev->fmBaseAddr + FM_BMI_PPIDS_OFFSET);
+	return GET_UINT32(p_Spliodn[hwid - 1]) & FM_LIODN_OFFSET_MASK;
+}
+EXPORT_SYMBOL(fm_port_get_icid);
+
 
 u64 *fm_port_get_buffer_time_stamp(const struct fm_port *port,
 		const void *data)
@@ -1379,12 +1317,14 @@ uint16_t fm_get_tx_port_channel(struct fm_port *port)
 }
 EXPORT_SYMBOL(fm_get_tx_port_channel);
 
+/* Both answer in negative errnos, as their netdev callers test them: the
+ * SDK's error type is a positive errno value (E_BUSY from a fenced port). */
 int fm_port_enable (struct fm_port *port)
 {
     t_LnxWrpFmPortDev   *p_LnxWrpFmPortDev = (t_LnxWrpFmPortDev*)port;
     t_Error err = FM_PORT_Enable(p_LnxWrpFmPortDev->h_Dev);
 
-    return GET_ERROR_TYPE(err);
+    return -GET_ERROR_TYPE(err);
 }
 EXPORT_SYMBOL(fm_port_enable);
 
@@ -1393,15 +1333,17 @@ int fm_port_disable(struct fm_port *port)
     t_LnxWrpFmPortDev   *p_LnxWrpFmPortDev = (t_LnxWrpFmPortDev*)port;
     t_Error err = FM_PORT_Disable(p_LnxWrpFmPortDev->h_Dev);
 
-    return GET_ERROR_TYPE(err);
+    return -GET_ERROR_TYPE(err);
 }
 EXPORT_SYMBOL(fm_port_disable);
 
+/* These three answer in negative errnos too: ndo_set_features and the PM
+ * core read nothing else as a failure. */
 int fm_port_enable_rx_l4csum(struct fm_port *port, bool enable)
 {
 	t_LnxWrpFmPortDev *p_LnxWrpFmPortDev = (t_LnxWrpFmPortDev *)port;
 
-	return FM_PORT_SetRxL4ChecksumVerify(p_LnxWrpFmPortDev->h_Dev, enable);
+	return -GET_ERROR_TYPE(FM_PORT_SetRxL4ChecksumVerify(p_LnxWrpFmPortDev->h_Dev, enable));
 }
 EXPORT_SYMBOL(fm_port_enable_rx_l4csum);
 
@@ -1409,7 +1351,7 @@ int fm_port_suspend(struct fm_port *port)
 {
 	t_LnxWrpFmPortDev *p_LnxWrpFmPortDev = (t_LnxWrpFmPortDev *)port;
 
-	return FM_PORT_Disable(p_LnxWrpFmPortDev->h_Dev);
+	return -GET_ERROR_TYPE(FM_PORT_Disable(p_LnxWrpFmPortDev->h_Dev));
 }
 EXPORT_SYMBOL(fm_port_suspend);
 
@@ -1417,28 +1359,10 @@ int fm_port_resume(struct fm_port *port)
 {
 	t_LnxWrpFmPortDev *p_LnxWrpFmPortDev = (t_LnxWrpFmPortDev *)port;
 
-	return FM_PORT_Enable(p_LnxWrpFmPortDev->h_Dev);
+	return -GET_ERROR_TYPE(FM_PORT_Enable(p_LnxWrpFmPortDev->h_Dev));
 }
 EXPORT_SYMBOL(fm_port_resume);
 
-#ifdef CONFIG_FMAN_PFC
-int fm_port_set_pfc_priorities_mapping_to_qman_wq(struct fm_port *port,
-		uint8_t prio, uint8_t wq)
-{
-	t_LnxWrpFmPortDev   *p_LnxWrpFmPortDev = (t_LnxWrpFmPortDev *)port;
-	int err;
-	int _errno;
-
-	err = FM_PORT_SetPfcPrioritiesMappingToQmanWQ(p_LnxWrpFmPortDev->h_Dev,
-			prio, wq);
-	_errno = -GET_ERROR_TYPE(err);
-	if (unlikely(_errno < 0))
-		pr_err("FM_PORT_SetPfcPrioritiesMappingToQmanWQ() = 0x%08x\n", err);
-
-	return _errno;
-}
-EXPORT_SYMBOL(fm_port_set_pfc_priorities_mapping_to_qman_wq);
-#endif
 
 int fm_mac_set_exception(struct fm_mac_dev *fm_mac_dev,
 		e_FmMacExceptions exception, bool enable)
@@ -1497,6 +1421,29 @@ int fm_mac_config_max_frame_length(struct fm_mac_dev *fm_mac_dev,
 	return _errno;
 }
 EXPORT_SYMBOL(fm_mac_config_max_frame_length);
+
+int fm_mac_set_max_frame_length(struct fm_mac_dev *fm_mac_dev, int len)
+{
+	t_Error err;
+	int _errno;
+
+	/* Ports are sized for fsl_fm_max_frm; a MAC may accept less, never
+	 * more.
+	 */
+	if (len <= 0 || len > fsl_fm_max_frm)
+		return -EINVAL;
+
+	err = FM_MAC_SetMaxFrameLength(fm_mac_dev, (uint16_t)len);
+	if (GET_ERROR_TYPE(err) == E_NOT_SUPPORTED)
+		return -EOPNOTSUPP;
+
+	_errno = -GET_ERROR_TYPE(err);
+	if (unlikely(_errno < 0))
+		pr_err("FM_MAC_SetMaxFrameLength() = 0x%08x\n", err);
+
+	return _errno;
+}
+EXPORT_SYMBOL(fm_mac_set_max_frame_length);
 
 int fm_mac_config_pad_and_crc(struct fm_mac_dev *fm_mac_dev, bool enable)
 {
@@ -1609,6 +1556,21 @@ int fm_mac_resume(struct fm_mac_dev *fm_mac_dev)
         return _errno;
 }
 EXPORT_SYMBOL(fm_mac_resume);
+
+int fm_mac_set_allmulti(struct fm_mac_dev *fm_mac_dev,
+		bool enable)
+{
+	int	_errno;
+	t_Error	err;
+
+	err = FM_MAC_SetAllMulti(fm_mac_dev, enable);
+	_errno = -GET_ERROR_TYPE(err);
+	if (unlikely(_errno < 0))
+		pr_err("FM_MAC_SetAllMulti() = 0x%08x\n", err);
+
+	return _errno;
+}
+EXPORT_SYMBOL(fm_mac_set_allmulti);
 
 int fm_mac_set_promiscuous(struct fm_mac_dev *fm_mac_dev,
 		bool enable)
@@ -1736,39 +1698,6 @@ int fm_mac_set_rx_pause_frames(
 }
 EXPORT_SYMBOL(fm_mac_set_rx_pause_frames);
 
-#ifdef CONFIG_FMAN_PFC
-int fm_mac_set_tx_pause_frames(struct fm_mac_dev *fm_mac_dev,
-					     bool en)
-{
-	int	_errno, i;
-	t_Error err;
-
-	if (en)
-		for (i = 0; i < CONFIG_FMAN_PFC_COS_COUNT; i++) {
-			err = FM_MAC_SetTxPauseFrames(fm_mac_dev,
-					i, fsl_fm_pfc_quanta[i],
-					FSL_FM_PAUSE_THRESH_DEFAULT);
-			_errno = -GET_ERROR_TYPE(err);
-			if (_errno < 0) {
-				pr_err("FM_MAC_SetTxPauseFrames() = 0x%08x\n", err);
-				return _errno;
-			}
-		}
-	else
-		for (i = 0; i < CONFIG_FMAN_PFC_COS_COUNT; i++) {
-			err = FM_MAC_SetTxPauseFrames(fm_mac_dev,
-					i, FSL_FM_PAUSE_TIME_DISABLE,
-					FSL_FM_PAUSE_THRESH_DEFAULT);
-			_errno = -GET_ERROR_TYPE(err);
-			if (_errno < 0) {
-				pr_err("FM_MAC_SetTxPauseFrames() = 0x%08x\n", err);
-				return _errno;
-			}
-		}
-
-	return _errno;
-}
-#else
 int fm_mac_set_tx_pause_frames(struct fm_mac_dev *fm_mac_dev,
 					     bool en)
 {
@@ -1788,167 +1717,8 @@ int fm_mac_set_tx_pause_frames(struct fm_mac_dev *fm_mac_dev,
 
 	return _errno;
 }
-#endif
 EXPORT_SYMBOL(fm_mac_set_tx_pause_frames);
 
-#ifdef CONFIG_FSL_SDK_FMAN_RTC_API
-int fm_rtc_enable(struct fm *fm_dev)
-{
-	int			 _errno;
-	t_Error			 err;
-
-	err = FM_RTC_Enable(fm_get_rtc_handle(fm_dev), 0);
-	_errno = -GET_ERROR_TYPE(err);
-	if (unlikely(_errno < 0))
-		pr_err("FM_RTC_Enable = 0x%08x\n", err);
-
-	return _errno;
-}
-EXPORT_SYMBOL(fm_rtc_enable);
-
-int fm_rtc_disable(struct fm *fm_dev)
-{
-	int			 _errno;
-	t_Error			 err;
-
-	err = FM_RTC_Disable(fm_get_rtc_handle(fm_dev));
-	_errno = -GET_ERROR_TYPE(err);
-	if (unlikely(_errno < 0))
-		pr_err("FM_RTC_Disable = 0x%08x\n", err);
-
-	return _errno;
-}
-EXPORT_SYMBOL(fm_rtc_disable);
-
-int fm_rtc_get_cnt(struct fm *fm_dev, uint64_t *ts)
-{
-	int _errno;
-	t_Error	err;
-
-	err = FM_RTC_GetCurrentTime(fm_get_rtc_handle(fm_dev), ts);
-	_errno = -GET_ERROR_TYPE(err);
-	if (unlikely(_errno < 0))
-		pr_err("FM_RTC_GetCurrentTime = 0x%08x\n", err);
-
-	return _errno;
-}
-EXPORT_SYMBOL(fm_rtc_get_cnt);
-
-int fm_rtc_set_cnt(struct fm *fm_dev, uint64_t ts)
-{
-	int _errno;
-	t_Error	err;
-
-	err = FM_RTC_SetCurrentTime(fm_get_rtc_handle(fm_dev), ts);
-	_errno = -GET_ERROR_TYPE(err);
-	if (unlikely(_errno < 0))
-		pr_err("FM_RTC_SetCurrentTime = 0x%08x\n", err);
-
-	return _errno;
-}
-EXPORT_SYMBOL(fm_rtc_set_cnt);
-
-int fm_rtc_get_drift(struct fm *fm_dev, uint32_t *drift)
-{
-	int _errno;
-	t_Error	err;
-
-	err = FM_RTC_GetFreqCompensation(fm_get_rtc_handle(fm_dev),
-			drift);
-	_errno = -GET_ERROR_TYPE(err);
-	if (unlikely(_errno < 0))
-		pr_err("FM_RTC_GetFreqCompensation = 0x%08x\n", err);
-
-	return _errno;
-}
-EXPORT_SYMBOL(fm_rtc_get_drift);
-
-int fm_rtc_set_drift(struct fm *fm_dev, uint32_t drift)
-{
-	int _errno;
-	t_Error	err;
-
-	err = FM_RTC_SetFreqCompensation(fm_get_rtc_handle(fm_dev),
-			drift);
-	_errno = -GET_ERROR_TYPE(err);
-	if (unlikely(_errno < 0))
-		pr_err("FM_RTC_SetFreqCompensation = 0x%08x\n", err);
-
-	return _errno;
-}
-EXPORT_SYMBOL(fm_rtc_set_drift);
-
-int fm_rtc_set_alarm(struct fm *fm_dev, uint32_t id,
-		uint64_t time)
-{
-	t_FmRtcAlarmParams alarm;
-	int _errno;
-	t_Error	err;
-
-	alarm.alarmId = id;
-	alarm.alarmTime = time;
-	alarm.f_AlarmCallback = NULL;
-	err = FM_RTC_SetAlarm(fm_get_rtc_handle(fm_dev),
-			&alarm);
-	_errno = -GET_ERROR_TYPE(err);
-	if (unlikely(_errno < 0))
-		pr_err("FM_RTC_SetAlarm = 0x%08x\n", err);
-
-	return _errno;
-}
-EXPORT_SYMBOL(fm_rtc_set_alarm);
-
-int fm_rtc_set_fiper(struct fm *fm_dev, uint32_t id,
-		uint64_t fiper)
-{
-	t_FmRtcPeriodicPulseParams pp;
-	int _errno;
-	t_Error	err;
-
-	pp.periodicPulseId = id;
-	pp.periodicPulsePeriod = fiper;
-	pp.f_PeriodicPulseCallback = NULL;
-	err = FM_RTC_SetPeriodicPulse(fm_get_rtc_handle(fm_dev), &pp);
-	_errno = -GET_ERROR_TYPE(err);
-	if (unlikely(_errno < 0))
-		pr_err("FM_RTC_SetPeriodicPulse = 0x%08x\n", err);
-
-	return _errno;
-}
-EXPORT_SYMBOL(fm_rtc_set_fiper);
-
-#ifdef CONFIG_PTP_1588_CLOCK_DPAA
-int fm_rtc_enable_interrupt(struct fm *fm_dev, uint32_t events)
-{
-	int _errno;
-	t_Error	err;
-
-	err = FM_RTC_EnableInterrupt(fm_get_rtc_handle(fm_dev),
-			events);
-	_errno = -GET_ERROR_TYPE(err);
-	if (unlikely(_errno < 0))
-		pr_err("FM_RTC_EnableInterrupt = 0x%08x\n", err);
-
-	return _errno;
-}
-EXPORT_SYMBOL(fm_rtc_enable_interrupt);
-
-int fm_rtc_disable_interrupt(struct fm *fm_dev, uint32_t events)
-{
-	int _errno;
-	t_Error	err;
-
-	err = FM_RTC_DisableInterrupt(fm_get_rtc_handle(fm_dev),
-			events);
-	_errno = -GET_ERROR_TYPE(err);
-	if (unlikely(_errno < 0))
-		pr_err("FM_RTC_DisableInterrupt = 0x%08x\n", err);
-
-	return _errno;
-}
-EXPORT_SYMBOL(fm_rtc_disable_interrupt);
-#endif
-#endif /* CONFIG_FSL_SDK_FMAN_RTC_API */
 
 int fm_mac_set_wol(struct fm_port *port, struct fm_mac_dev *fm_mac_dev, bool en)
 {
@@ -1987,11 +1757,7 @@ static int __init __cold fm_load (void)
         return -ENODEV;
     }
 
-	printk(KERN_INFO "Freescale FM module," \
-		" FMD API version %d.%d.%d\n",
-		FMD_API_VERSION_MAJOR,
-		FMD_API_VERSION_MINOR,
-		FMD_API_VERSION_RESPIN);
+	printk(KERN_INFO "Freescale FM module\n");
     return 0;
 }
 
