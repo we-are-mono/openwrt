@@ -48,7 +48,7 @@ LINE=$(sed -n 's/^KERNEL_PATCHVER *:= *\([0-9.]*\).*/\1/p' target/linux/layersca
 # ASK is the single authoritative pin. The NXP SDK ref is READ from ASK's recipe
 # (NXP_SDK_SRCREV) below, never hand-maintained here.
 ASK_URL="https://github.com/we-are-mono/ASK.git"
-ASK_VERSION="8553df4c9c0124cd99a88ec04e8fca93a960a3bc"
+ASK_VERSION="df0c3f2a47044c15c4643d2770ebcb3c1cf08088"
 NXP_URL="https://github.com/nxp-qoriq/linux.git"
 
 # ASK hooks mono must FORWARD-PORT because OpenWrt is not stock mainline: on 6.12, 070
