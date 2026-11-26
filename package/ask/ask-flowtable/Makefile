@@ -3,7 +3,7 @@ include $(TOPDIR)/package/ask/ask-version.mk
 
 PKG_NAME:=ask-flowtable
 PKG_VERSION:=$(ASK_PKG_VERSION)
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=$(ASK_SOURCE_URL)
@@ -23,7 +23,7 @@ define Package/ask-flowtable
   CATEGORY:=Network
   TITLE:=ASK hardware flow-offload service
   DEPENDS:=@TARGET_layerscape +kmod-ask-flowtable +nftables +mono-ab-env +jsonfilter \
-	+kmod-sched-core +kmod-sched-flower +kmod-sched-act-police +tc-full +devlink \
+	+kmod-sched-core +kmod-sched-flower +kmod-sched-act-police +kmod-sched-red +tc-full +devlink \
 	+kmod-ip6-tunnel
 endef
 
