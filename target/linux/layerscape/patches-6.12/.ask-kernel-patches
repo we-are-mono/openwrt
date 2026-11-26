@@ -1,4 +1,4 @@
-# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ df0c3f2a47044c15c4643d2770ebcb3c1cf08088
+# ASK kernel patches synced from https://github.com/we-are-mono/ASK.git @ 5a40ecf8fc667d8986e152d440558bbf33658f5e
 010-ask-fast-path-core.patch
 040-ask-xfrm-ipsec-offload.patch
 080-wext-core-restore-ndo_do_ioctl.patch
